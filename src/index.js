@@ -10,14 +10,14 @@ const toHex = bytes => [...new Uint8Array(bytes)].map(x => x.toString(16).padSta
 async function digest(value) { return toHex(await crypto.subtle.digest("SHA-256", enc.encode(value))); }
 async function passwordHash(password, salt = toHex(crypto.getRandomValues(new Uint8Array(16)))) {
   const material = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: enc.encode(salt), iterations: 310000, hash: "SHA-256" }, material, 256);
-  return "pbkdf2-sha256$310000$" + salt + "$" + toHex(bits);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: enc.encode(salt), iterations: 100000, hash: "SHA-256" }, material, 256);
+  return "pbkdf2-sha256$100000$" + salt + "$" + toHex(bits);
 }
 async function verifyPassword(password, stored) {
   const [scheme, rounds, salt, expected] = String(stored).split("$");
-  if (scheme !== "pbkdf2-sha256" || Number(rounds) !== 310000 || !salt || !expected) return false;
+  if (scheme !== "pbkdf2-sha256" || Number(rounds) !== 100000 || !salt || !expected) return false;
   const material = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: enc.encode(salt), iterations: 310000, hash: "SHA-256" }, material, 256);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: enc.encode(salt), iterations: 100000, hash: "SHA-256" }, material, 256);
   const actual = toHex(bits);
   return actual.length === expected.length && actual === expected;
 }
