@@ -2,62 +2,67 @@
 
 Campusly is a school-focused collaboration platform with a GitHub-inspired dark interface, class channels, private direct messages, role-based access, moderation reports, and administrator audit logs.
 
-## Current project structure
+## Project files
 
-- `public/index.html` — responsive Campusly interface
+- `public/index.html` — responsive frontend
 - `src/index.js` — Cloudflare Worker API
-- `schema.sql` — D1 database schema
-- `wrangler.jsonc` — Worker, assets, and D1 configuration
+- `schema.sql` — D1 schema
+- `migrations/0001_initial.sql` — initial D1 migration
+- `wrangler.jsonc` — Worker, static assets, and D1 configuration
+- `package.json` — local development and deployment scripts
 
 ## Roles
 
-- **Student** — participate in classes and channels the account belongs to, use direct messages, and submit reports.
-- **Teacher** — planned class-level management permissions; do not grant this role broader administrative access by default.
-- **Moderator** — review safety reports.
-- **Administrator** — manage roles, users, classes, channels, and audit logs.
+- **Student** — access classes/channels they are enrolled in, use private messages, and submit reports.
+- **Teacher** — can be assigned as a class member; additional teacher-specific management features remain to be implemented.
+- **Moderator** — intended for safety-report review; the API restricts report review access to moderators and administrators.
+- **Administrator** — manage accounts, roles, classes, channels, enrollment, and audit logs.
 
-All privileged endpoints must enforce authorization on the server. Hiding a button in the browser is not a security boundary.
+Privileged actions are checked by the server, not merely hidden in the interface.
 
-## Before deployment
+## Cloudflare setup
 
-1. Create a Cloudflare D1 database named `campusly-db`.
-2. Replace `REPLACE_WITH_YOUR_D1_DATABASE_ID` in `wrangler.jsonc` with the database ID shown in Cloudflare.
-3. Apply the schema: `npx wrangler d1 execute campusly-db --remote --file=./schema.sql`.
-4. The D1 schema has already been created in the connected Cloudflare account for this project. For a new environment, apply it with `npx wrangler d1 execute campusly-db --remote --file=./schema.sql` or use the migration in `migrations/0001_initial.sql`.
-5. Configure Worker secrets/variables:
-   - `ADMIN_USERNAME` — initial administrator username (for example, `siteadmin`).
-   - `CAMPUSLY_BOOTSTRAP_ADMIN_PASSWORD` — a new, unique password of at least 14 characters. Add it using `npx wrangler secret put CAMPUSLY_BOOTSTRAP_ADMIN_PASSWORD`; never put it in Git, source files, or a public dashboard.
-6. `ADMIN_USERNAME` is already configured as `siteadmin` in `wrangler.jsonc`.
-7. Install dependencies with `npm install`, then deploy with `npm run deploy`.
-8. Visit the deployed Worker URL over HTTPS and test sign-in, logout, role checks, class enrollment, private messaging, and audit logging before inviting users.
+The connected Cloudflare account already has a D1 database named `campusly-db`, and the schema has been applied. The database ID is configured in `wrangler.jsonc`. For a new environment, create a D1 database and apply `schema.sql`:
 
-The bootstrap routine creates the administrator only if that username does not already exist. Rotating the environment secret will not reset an existing account password. A separate, audited password-reset flow should be implemented before production use.
+```sh
+npx wrangler d1 create campusly-db
+# Replace database_id in wrangler.jsonc with the new database ID.
+npx wrangler d1 execute campusly-db --remote --file=./schema.sql
+```
+
+The initial administrator username is configured as `siteadmin` in `wrangler.jsonc`. **Do not use the password previously shared in chat.** After deploying the Worker, set a new unique password of at least 14 characters as a Worker secret:
+
+```sh
+npm install
+npm run deploy
+npx wrangler secret put CAMPUSLY_BOOTSTRAP_ADMIN_PASSWORD
+```
+
+Enter the new password only at the Wrangler prompt. Never put it in source code, a GitHub file, or a commit. Then visit the deployed HTTPS site. The Worker creates the administrator account on the first request if the configured username does not already exist. If the account already exists, changing the secret does not reset its password.
 
 ## Security notes
 
-- Passwords are stored as PBKDF2-SHA-256 hashes with per-user salts.
-- Sessions use random bearer tokens stored as SHA-256 hashes in D1 and are sent in Secure, HttpOnly, SameSite cookies.
-- Do not store plaintext passwords, session tokens, or full private-message bodies in audit logs.
-- Audit logs are designed to record event metadata; database administrators can still alter D1 data. Stronger tamper evidence requires exporting logs to a separately controlled destination.
-- Failed-login events are logged. Add rate limiting, account lockout/backoff, monitoring, and recovery procedures before public deployment.
-- Direct messages are restricted to conversation participants by the API. Administrators do not automatically receive access to message contents. If a school needs a safety review process, make it policy-based, narrowly scoped, disclosed to users, and audit every access.
-- School use requires appropriate student privacy practices, data retention rules, consent/authorization, and careful handling of minors' information.
-- This is a development starter, not a security-audited production service. Review and test before using real student data.
-
-## Current implementation limits
-
-This starter includes login/logout, session authentication, class-channel reading and messaging, direct messages, basic role changes, class/channel creation endpoints, reports, and audit-log viewing. Some UI management screens and advanced workflows remain to be completed. There is no end-to-end encryption, live WebSocket delivery, password-reset UI, email verification, invitation flow, or comprehensive rate limiting yet.
+- Passwords are stored as salted PBKDF2-SHA-256 hashes.
+- Sessions use random tokens; only token hashes are stored in D1. Browser cookies are Secure, HttpOnly, and SameSite=Strict.
+- Audit logs record metadata for logins, role/account changes, class/channel operations, message-sending events, reports, and administrative log access. Message bodies and passwords are not copied into audit records.
+- Audit rows are protected from ordinary application-level editing, but a Cloudflare account/database administrator can still alter database contents. For stronger tamper evidence, export logs to a separately controlled destination.
+- Direct messages are restricted to conversation participants. Administrators do not automatically get permission to read private-message contents.
+- Rate limiting, email verification, password recovery, live WebSocket delivery, end-to-end encryption, advanced moderation workflows, and a full production security review are not yet implemented.
+- This is a development starter, not a security-audited production service. Test with non-sensitive data before inviting students. School use requires appropriate privacy, retention, authorization, and safeguarding practices.
 
 ## Local development
 
-Install a current Node.js LTS release, then:
+Use a current Node.js LTS release:
 
 ```sh
-npm install --save-dev wrangler
-npx wrangler d1 create campusly-db
-# Update database_id in wrangler.jsonc, then apply schema to the local DB:
-npx wrangler d1 execute campusly-db --local --file=./schema.sql
+npm install
 npx wrangler dev
 ```
 
-For local testing, set secrets with Wrangler's local secret workflow. Do not use real student information in development.
+For a fresh local D1 database, apply the schema:
+
+```sh
+npx wrangler d1 execute campusly-db --local --file=./schema.sql
+```
+
+Do not use real student data in local development.
