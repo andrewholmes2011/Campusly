@@ -30,7 +30,7 @@ npx wrangler d1 create campusly-db
 npx wrangler d1 execute campusly-db --remote --file=./schema.sql
 ```
 
-The initial administrator username is configured as `siteadmin` in `wrangler.jsonc`. The GitHub Actions workflow in `.github/workflows/deploy.yml` deploys on pushes to `main` once you add a repository secret named `CLOUDFLARE_API_TOKEN` with permission to deploy Workers. **Do not use the password previously shared in chat.** After deploying the Worker, set a new unique password of at least 14 characters as a Worker secret:
+The initial administrator username is configured as `siteadmin` in `wrangler.jsonc`. The GitHub Actions workflow in `.github/workflows/deploy.yml` deploys on pushes to `main` once you add a repository secret named `CLOUDFLARE_API_TOKEN` with permission to deploy Workers. **Do not use the password previously shared in chat.** After deploying the Worker, set a new unique password of at least 6 characters as a Worker secret:
 
 ```sh
 npm install
