@@ -60,7 +60,10 @@ const DEFAULT_CLASS_SERVERS = [
   { name: "Fine Arts & Electives", description: "Creative projects, electives, and cross-class collaboration.", channels: [["general","Class discussion"],["announcements","Class updates and reminders"],["projects","Project collaboration"],["showcase","Share work and ideas"],["resources","Class resources"]] }
 ];
 async function ensureDefaultClassServers(env, actor) {
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS class_template_exclusions (name TEXT PRIMARY KEY, deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, deleted_by TEXT)").run();
   for (const template of DEFAULT_CLASS_SERVERS) {
+    const excluded = await env.DB.prepare("SELECT name FROM class_template_exclusions WHERE name=? COLLATE NOCASE").bind(template.name).first();
+    if (excluded) continue;
     let cls = await env.DB.prepare("SELECT id FROM classes WHERE name=? COLLATE NOCASE LIMIT 1").bind(template.name).first();
     if (!cls) {
       const classId = id();
@@ -308,7 +311,69 @@ async function handle(request, env) {
   }
   if(path==="/api/admin/classes"&&request.method==="GET"){
     if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
-    const rows=await env.DB.prepare("SELECT id,name,description,created_at FROM classes ORDER BY name").all();return json({classes:rows.results||[]});
+    const rows=await env.DB.prepare("SELECT id,name,description,created_at FROM classes ORDER BY name").all();const classes=[];for(const cls of rows.results||[]){const channels=await env.DB.prepare("SELECT id,name,description FROM channels WHERE class_id=? ORDER BY name").bind(cls.id).all();classes.push({...cls,channels:channels.results||[]});}return json({classes});
+  }
+  const adminClassRoute=path.match(/^\/api\/admin\/classes\/([^/]+)$/);
+  if(adminClassRoute&&request.method==="PATCH"){
+    if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
+    const classId=decodeURIComponent(adminClassRoute[1]);const data=await body(request);
+    const name=typeof data?.name==="string"?data.name.trim():"";const description=typeof data?.description==="string"?data.description.trim().slice(0,500):"";
+    if(!name||name.length>100)return fail("Server name must be between 1 and 100 characters.");
+    const cls=await env.DB.prepare("SELECT id,name FROM classes WHERE id=?").bind(classId).first();if(!cls)return fail("Server not found.",404);
+    const collision=await env.DB.prepare("SELECT id FROM classes WHERE name=? COLLATE NOCASE AND id<>?").bind(name,classId).first();if(collision)return fail("A server with that name already exists.");
+    await env.DB.prepare("UPDATE classes SET name=?,description=? WHERE id=?").bind(name,description,classId).run();
+    const template=DEFAULT_CLASS_SERVERS.find(t=>t.name.toLowerCase()===cls.name.toLowerCase());
+    if(template&&template.name.toLowerCase()!==name.toLowerCase()){
+      await env.DB.prepare("CREATE TABLE IF NOT EXISTS class_template_exclusions (name TEXT PRIMARY KEY, deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, deleted_by TEXT)").run();
+      await env.DB.prepare("INSERT INTO class_template_exclusions(name,deleted_by) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET deleted_at=CURRENT_TIMESTAMP,deleted_by=excluded.deleted_by").bind(template.name,user.id).run();
+    }
+    await audit(env,user,"class_renamed",cls.name,"success",{class_id:classId,new_name:name});
+    return json({ok:true,name});
+  }
+  if(adminClassRoute&&request.method==="DELETE"){
+    if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
+    const classId=decodeURIComponent(adminClassRoute[1]);const cls=await env.DB.prepare("SELECT id,name FROM classes WHERE id=?").bind(classId).first();if(!cls)return fail("Server not found.",404);
+    const template=DEFAULT_CLASS_SERVERS.find(t=>t.name.toLowerCase()===cls.name.toLowerCase());
+    if(template){
+      await env.DB.prepare("CREATE TABLE IF NOT EXISTS class_template_exclusions (name TEXT PRIMARY KEY, deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, deleted_by TEXT)").run();
+      await env.DB.prepare("INSERT INTO class_template_exclusions(name,deleted_by) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET deleted_at=CURRENT_TIMESTAMP,deleted_by=excluded.deleted_by").bind(template.name,user.id).run();
+    }
+    await env.DB.prepare("DELETE FROM messages WHERE channel_id IN (SELECT id FROM channels WHERE class_id=?)").bind(classId).run();
+    await env.DB.prepare("DELETE FROM channels WHERE class_id=?").bind(classId).run();
+    await env.DB.prepare("DELETE FROM classes WHERE id=?").bind(classId).run();
+    await audit(env,user,"class_deleted",cls.name,"success",{class_id:classId});
+    return json({ok:true});
+  }
+  const adminChannelRoute=path.match(/^\/api\/admin\/channels\/([^/]+)$/);
+  if(adminChannelRoute&&request.method==="DELETE"){
+    if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
+    const channelId=decodeURIComponent(adminChannelRoute[1]);
+    const channel=await env.DB.prepare("SELECT ch.id,ch.name,c.name AS class_name FROM channels ch JOIN classes c ON c.id=ch.class_id WHERE ch.id=?").bind(channelId).first();
+    if(!channel)return fail("Channel not found.",404);
+    await env.DB.prepare("DELETE FROM messages WHERE channel_id=?").bind(channelId).run();
+    await env.DB.prepare("DELETE FROM channels WHERE id=?").bind(channelId).run();
+    await audit(env,user,"channel_deleted",channel.name,"success",{channel_id:channelId,class_name:channel.class_name});
+    return json({ok:true});
+  }
+  const adminClearChatRoute=path.match(/^\/api\/admin\/channels\/([^/]+)\/messages$/);
+  if(adminClearChatRoute&&request.method==="DELETE"){
+    if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
+    const channelId=decodeURIComponent(adminClearChatRoute[1]);
+    const channel=await env.DB.prepare("SELECT ch.id,ch.name,c.name AS class_name FROM channels ch JOIN classes c ON c.id=ch.class_id WHERE ch.id=?").bind(channelId).first();
+    if(!channel)return fail("Channel not found.",404);
+    const result=await env.DB.prepare("DELETE FROM messages WHERE channel_id=?").bind(channelId).run();
+    await audit(env,user,"channel_chat_cleared",channel.name,"success",{channel_id:channelId,class_name:channel.class_name,deleted_count:result.meta?.changes||0});
+    return json({ok:true,deleted_count:result.meta?.changes||0});
+  }
+  const adminDeleteMessageRoute=path.match(/^\/api\/admin\/channels\/([^/]+)\/messages\/([^/]+)$/);
+  if(adminDeleteMessageRoute&&request.method==="DELETE"){
+    if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
+    const channelId=decodeURIComponent(adminDeleteMessageRoute[1]);const messageId=decodeURIComponent(adminDeleteMessageRoute[2]);
+    const msg=await env.DB.prepare("SELECT id FROM messages WHERE id=? AND channel_id=? AND deleted_at IS NULL").bind(messageId,channelId).first();
+    if(!msg)return fail("Message not found.",404);
+    await env.DB.prepare("UPDATE messages SET deleted_at=CURRENT_TIMESTAMP WHERE id=? AND channel_id=?").bind(messageId,channelId).run();
+    await audit(env,user,"channel_message_deleted",messageId,"success",{channel_id:channelId});
+    return json({ok:true});
   }
   const classMemberParts=path.split("/");
   const classMemberRoute=classMemberParts.length===6&&classMemberParts[1]==="api"&&classMemberParts[2]==="admin"&&classMemberParts[3]==="classes"&&classMemberParts[5]==="members"?[null,classMemberParts[4]]:null;
