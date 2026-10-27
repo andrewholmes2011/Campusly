@@ -66,3 +66,18 @@ npx wrangler d1 execute campusly-db --local --file=./schema.sql
 ```
 
 Do not use real student data in local development.
+
+## Current interface behavior
+
+- Server navigation uses readable query codes such as `/?server=hanfordhs`, with an optional channel query such as `/?server=hanfordhs&channel=announcements`. Codes are generated from the server name; a few common school/community names have short aliases. Access is still checked by the API and a URL is never treated as proof of membership.
+- The server rail, channel list, responsive workspace, message composer, reports, direct messages, profile editor, server catalog, and administrator tools are connected to the Worker API.
+- The settings gear opens a popup. Appearance, notification reminders, reduced-motion preferences, privacy/safety guidance, school information, profile editing, and authorized server-management navigation are available from the popup. Appearance and local interface preferences are stored in the current browser only; they are not account-wide preferences.
+- Channel categories can be collapsed. Messages support reporting and author/administrator controls currently exposed by the interface.
+
+## Features not yet production-ready
+
+- Password recovery, email verification, self-service sign-up, push notifications, WebSocket delivery, message reactions, and a dedicated Campusly System Administrator role are not implemented.
+- The current roles in the database are `student`, `teacher`, `moderator`, and `administrator`. Do not assume that UI-only options constitute a new permission. Server-side checks remain authoritative.
+- Server/channel URL aliases are human-readable, but they are not a replacement for authorization or a formally managed server-code registry.
+- This is not a security-audited school communications service. Before real student use, add appropriate rate limiting, account recovery, retention controls, operational monitoring, and a school-approved privacy/safeguarding review.
+
