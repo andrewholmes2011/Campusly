@@ -1,0 +1,106 @@
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'student' CHECK (role IN ('student','teacher','moderator','administrator')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended','disabled')),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  last_login_at TEXT
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  id_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  ip_hash TEXT,
+  user_agent TEXT
+);
+CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
+CREATE TABLE IF NOT EXISTS classes (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  created_by TEXT REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE TABLE IF NOT EXISTS class_members (
+  class_id TEXT NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  class_role TEXT NOT NULL DEFAULT 'student' CHECK (class_role IN ('student','teacher')),
+  joined_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY(class_id,user_id)
+);
+CREATE TABLE IF NOT EXISTS channels (
+  id TEXT PRIMARY KEY,
+  class_id TEXT NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  visibility TEXT NOT NULL DEFAULT 'class' CHECK (visibility IN ('class','private')),
+  created_by TEXT REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE(class_id,name)
+);
+CREATE TABLE IF NOT EXISTS channel_members (
+  channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY(channel_id,user_id)
+);
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  sender_id TEXT NOT NULL REFERENCES users(id),
+  content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 4000),
+  reply_to TEXT REFERENCES messages(id),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  edited_at TEXT,
+  deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS messages_channel_time_idx ON messages(channel_id,created_at);
+CREATE TABLE IF NOT EXISTS conversations (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE TABLE IF NOT EXISTS conversation_members (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY(conversation_id,user_id)
+);
+CREATE TABLE IF NOT EXISTS direct_messages (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  sender_id TEXT NOT NULL REFERENCES users(id),
+  content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 4000),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  edited_at TEXT,
+  deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS dms_conversation_time_idx ON direct_messages(conversation_id,created_at);
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  actor_username TEXT,
+  action TEXT NOT NULL,
+  target TEXT,
+  result TEXT NOT NULL DEFAULT 'success',
+  details_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS audit_time_idx ON audit_logs(created_at);
+CREATE INDEX IF NOT EXISTS audit_actor_idx ON audit_logs(actor_id,created_at);
+CREATE TABLE IF NOT EXISTS reports (
+  id TEXT PRIMARY KEY,
+  reporter_id TEXT NOT NULL REFERENCES users(id),
+  target_type TEXT NOT NULL CHECK (target_type IN ('user','channel_message','direct_message')),
+  target_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','reviewing','resolved','dismissed')),
+  assigned_to TEXT REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  resolved_at TEXT
+);
+CREATE INDEX IF NOT EXISTS reports_status_idx ON reports(status,created_at);
