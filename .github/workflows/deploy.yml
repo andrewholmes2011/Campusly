@@ -22,7 +22,8 @@ jobs:
       - name: Validate JavaScript syntax
         run: |
           node --check src/index.js
-          node --check <(sed -n '/<script>/,/<\/script>/p' public/index.html | sed '1d;$d')
+          sed -n '/<script>/,/<\/script>/p' public/index.html | sed '1d;$d' > /tmp/campusly-frontend.js
+          node --check /tmp/campusly-frontend.js
       - name: Deploy Worker and static assets
         run: npx wrangler deploy
         env:
