@@ -217,7 +217,7 @@ async function handle(request, env) {
     if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
     const rows=await env.DB.prepare("SELECT id,name,description,created_at FROM classes ORDER BY name").all();return json({classes:rows.results||[]});
   }
-  const classMemberRoute=path.match(/^\\/api\\/admin\\/classes\\/([^/]+)\\/members$/);
+  const classMemberRoute=path.match(/^\/api\/admin\/classes\/([^/]+)\/members$/);
   if(classMemberRoute&&request.method==="POST"){
     if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
     const classId=decodeURIComponent(classMemberRoute[1]);const data=await body(request);const username=typeof data?.username==="string"?data.username.trim():"";const classRole=data?.class_role==="teacher"?"teacher":"student";
