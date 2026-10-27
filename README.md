@@ -23,12 +23,13 @@ All privileged endpoints must enforce authorization on the server. Hiding a butt
 1. Create a Cloudflare D1 database named `campusly-db`.
 2. Replace `REPLACE_WITH_YOUR_D1_DATABASE_ID` in `wrangler.jsonc` with the database ID shown in Cloudflare.
 3. Apply the schema: `npx wrangler d1 execute campusly-db --remote --file=./schema.sql`.
-4. Configure Worker secrets/variables:
+4. The D1 schema has already been created in the connected Cloudflare account for this project. For a new environment, apply it with `npx wrangler d1 execute campusly-db --remote --file=./schema.sql` or use the migration in `migrations/0001_initial.sql`.
+5. Configure Worker secrets/variables:
    - `ADMIN_USERNAME` — initial administrator username (for example, `siteadmin`).
    - `CAMPUSLY_BOOTSTRAP_ADMIN_PASSWORD` — a new, unique password of at least 14 characters. Add it using `npx wrangler secret put CAMPUSLY_BOOTSTRAP_ADMIN_PASSWORD`; never put it in Git, source files, or a public dashboard.
-5. Configure `ADMIN_USERNAME` as a non-secret Worker variable or secret.
-6. Deploy with `npx wrangler deploy`.
-7. Visit the site over HTTPS and test sign-in, logout, role checks, and audit logging before inviting users.
+6. `ADMIN_USERNAME` is already configured as `siteadmin` in `wrangler.jsonc`.
+7. Install dependencies with `npm install`, then deploy with `npm run deploy`.
+8. Visit the deployed Worker URL over HTTPS and test sign-in, logout, role checks, class enrollment, private messaging, and audit logging before inviting users.
 
 The bootstrap routine creates the administrator only if that username does not already exist. Rotating the environment secret will not reset an existing account password. A separate, audited password-reset flow should be implemented before production use.
 
