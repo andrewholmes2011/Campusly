@@ -424,13 +424,28 @@ async function handle(request, env) {
   }
   return fail("Not found.",404);
 }
+async function fetchAssetWithoutStaleCache(request, env) {
+  const response = await env.ASSETS.fetch(request);
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
+  headers.set("Pragma", "no-cache");
+  headers.set("Expires", "0");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
+
 export default {
   async fetch(request, env, ctx) {
     try {
       if (request.method === "GET" && new URL(request.url).pathname === "/") {
-        if (env.ASSETS) return env.ASSETS.fetch(request);
+        if (env.ASSETS) return await fetchAssetWithoutStaleCache(request, env);
       }
-      if (request.method === "GET" && !new URL(request.url).pathname.startsWith("/api/") && env.ASSETS) return env.ASSETS.fetch(request);
+      if (request.method === "GET" && !new URL(request.url).pathname.startsWith("/api/") && env.ASSETS) {
+        return await fetchAssetWithoutStaleCache(request, env);
+      }
       return await handle(request, env);
     } catch (error) {
       console.error("Campusly request failed", error?.message || error);
