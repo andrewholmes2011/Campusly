@@ -6,6 +6,7 @@
   "compatibility_date": "2026-10-26",
   "vars": {
     "ADMIN_USERNAME": "siteadmin"
+    "CAMPUSLY_BOOTSTRAP_ADMIN_PASSWORD": "ThisPasswordIsLongerThan14Characters"
   },
   "assets": {
     "directory": "./public",
