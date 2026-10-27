@@ -30,7 +30,7 @@ npx wrangler d1 create campusly-db
 npx wrangler d1 execute campusly-db --remote --file=./schema.sql
 ```
 
-The initial administrator username is configured as `siteadmin` in `wrangler.jsonc`. **Do not use the password previously shared in chat.** After deploying the Worker, set a new unique password of at least 14 characters as a Worker secret:
+The initial administrator username is configured as `siteadmin` in `wrangler.jsonc`. The GitHub Actions workflow in `.github/workflows/deploy.yml` deploys on pushes to `main` once you add a repository secret named `CLOUDFLARE_API_TOKEN` with permission to deploy Workers. **Do not use the password previously shared in chat.** After deploying the Worker, set a new unique password of at least 14 characters as a Worker secret:
 
 ```sh
 npm install
@@ -38,7 +38,7 @@ npm run deploy
 npx wrangler secret put CAMPUSLY_BOOTSTRAP_ADMIN_PASSWORD
 ```
 
-Enter the new password only at the Wrangler prompt. Never put it in source code, a GitHub file, or a commit. Then visit the deployed HTTPS site. The Worker creates the administrator account on the first request if the configured username does not already exist. If the account already exists, changing the secret does not reset its password.
+Enter the new password only at the Wrangler prompt. Never put it in source code, a GitHub file, or a commit. If running Wrangler locally, authenticate it to the configured Cloudflare account first. Then visit the deployed HTTPS site. The Worker creates the administrator account on the first request if the configured username does not already exist. If the account already exists, changing the secret does not reset its password.
 
 ## Security notes
 
