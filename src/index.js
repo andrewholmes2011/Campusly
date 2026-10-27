@@ -217,6 +217,16 @@ async function handle(request, env) {
     if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
     const rows=await env.DB.prepare("SELECT id,name,description,created_at FROM classes ORDER BY name").all();return json({classes:rows.results||[]});
   }
+  const classMemberRoute=path.match(/^\\/api\\/admin\\/classes\\/([^/]+)\\/members$/);
+  if(classMemberRoute&&request.method==="POST"){
+    if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
+    const classId=decodeURIComponent(classMemberRoute[1]);const data=await body(request);const username=typeof data?.username==="string"?data.username.trim():"";const classRole=data?.class_role==="teacher"?"teacher":"student";
+    const cls=await env.DB.prepare("SELECT id,name FROM classes WHERE id=?").bind(classId).first();if(!cls)return fail("Class not found.",404);
+    const target=await env.DB.prepare("SELECT id,username FROM users WHERE username=? COLLATE NOCASE AND status='active'").bind(username).first();if(!target)return fail("Active user not found.",404);
+    await env.DB.prepare("INSERT INTO class_members(class_id,user_id,class_role) VALUES(?,?,?) ON CONFLICT(class_id,user_id) DO UPDATE SET class_role=excluded.class_role").bind(classId,target.id,classRole).run();
+    await audit(env,user,"class_member_added",cls.name,"success",{member:target.username,class_role:classRole});
+    return json({ok:true,username:target.username,class_role:classRole},201);
+  }
   if(path==="/api/reports"&&request.method==="POST"){
     const data=await body(request);const targetType=data?.target_type;const targetId=String(data?.target_id||"");const reason=typeof data?.reason==="string"?data.reason.trim().slice(0,1000):"";
     if(!["user","channel_message","direct_message"].includes(targetType)||!targetId||!reason)return fail("Target and reason are required.");
