@@ -3,6 +3,8 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  display_name TEXT NOT NULL DEFAULT '',
+  avatar_url TEXT NOT NULL DEFAULT '',
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'student' CHECK (role IN ('student','teacher','moderator','administrator')),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended','disabled')),
@@ -25,7 +27,8 @@ CREATE TABLE IF NOT EXISTS classes (
   name TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   created_by TEXT REFERENCES users(id),
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  invite_code TEXT UNIQUE
 );
 CREATE TABLE IF NOT EXISTS class_members (
   class_id TEXT NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
