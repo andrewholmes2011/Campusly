@@ -84,8 +84,8 @@ async function seedAdmin(env) {
   if (!env.ADMIN_USERNAME || !env.CAMPUSLY_BOOTSTRAP_ADMIN_PASSWORD) return;
   const username = String(env.ADMIN_USERNAME).trim();
   const password = String(env.CAMPUSLY_BOOTSTRAP_ADMIN_PASSWORD);
-  if (!/^[a-zA-Z0-9._-]{3,64}$/.test(username) || password.length < 14) {
-    console.error("Admin bootstrap skipped: username format or password length policy failed.");
+  if (!/^[a-zA-Z0-9._-]{3,64}$/.test(username) || password.length < 6) {
+    console.error("Admin bootstrap skipped: username format or minimum password length policy failed.");
     return;
   }
   const existing = await env.DB.prepare("SELECT id FROM users WHERE username=? COLLATE NOCASE").bind(username).first();
@@ -259,7 +259,7 @@ async function handle(request, env) {
     if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
     const data=await body(request);const username=typeof data?.username==="string"?data.username.trim():"";const password=typeof data?.password==="string"?data.password:"";const role=data?.role||"student";
     if(!/^[a-zA-Z0-9._-]{3,64}$/.test(username))return fail("Username must be 3-64 characters using letters, numbers, dots, underscores, or hyphens.");
-    if(password.length<14||password.length>256)return fail("Set a unique initial password of at least 14 characters.");
+    if(password.length<6||password.length>256)return fail("Set a unique initial password of at least 6 characters.");
     if(!ROLES.includes(role))return fail("Invalid role.");
     const exists=await env.DB.prepare("SELECT id FROM users WHERE username=? COLLATE NOCASE").bind(username).first();if(exists)return fail("That username is already taken.",409);
     const userId=id();const hash=await passwordHash(password);
