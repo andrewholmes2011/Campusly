@@ -113,6 +113,7 @@ async function handle(request, env) {
       if (!content || content.length > 4000) return fail("Messages must be between 1 and 4000 characters.");
       const messageId = id();
       await env.DB.prepare("INSERT INTO messages(id,channel_id,sender_id,content) VALUES(?,?,?,?)").bind(messageId,channelId,user.id,content).run();
+      await audit(env,user,"channel_message_sent",channelId,"success",{message_id:messageId});
       return json({ ok: true, id: messageId }, 201);
     }
   }
@@ -154,8 +155,21 @@ async function handle(request, env) {
       const messageId=id();
       await env.DB.prepare("INSERT INTO direct_messages(id,conversation_id,sender_id,content) VALUES(?,?,?,?)").bind(messageId,conversationId,user.id,content).run();
       await env.DB.prepare("UPDATE conversations SET updated_at=? WHERE id=?").bind(new Date().toISOString(),conversationId).run();
+      await audit(env,user,"direct_message_sent",conversationId,"success",{message_id:messageId});
       return json({ok:true,id:messageId},201);
     }
+  }
+  if (path === "/api/admin/users" && request.method === "POST") {
+    if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
+    const data=await body(request);const username=typeof data?.username==="string"?data.username.trim():"";const password=typeof data?.password==="string"?data.password:"";const role=data?.role||"student";
+    if(!/^[a-zA-Z0-9._-]{3,64}$/.test(username))return fail("Username must be 3-64 characters using letters, numbers, dots, underscores, or hyphens.");
+    if(password.length<14||password.length>256)return fail("Set a unique initial password of at least 14 characters.");
+    if(!ROLES.includes(role))return fail("Invalid role.");
+    const exists=await env.DB.prepare("SELECT id FROM users WHERE username=? COLLATE NOCASE").bind(username).first();if(exists)return fail("That username is already taken.",409);
+    const userId=id();const hash=await passwordHash(password);
+    await env.DB.prepare("INSERT INTO users(id,username,password_hash,role) VALUES(?,?,?,?)").bind(userId,username,hash,role).run();
+    await audit(env,user,"user_created",username,"success",{role});
+    return json({ok:true,id:userId,username,role},201);
   }
   if (path === "/api/admin/users" && request.method === "GET") {
     if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
@@ -176,6 +190,7 @@ async function handle(request, env) {
   }
   if(path==="/api/admin/audit"&&request.method==="GET"){
     if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
+    await audit(env,user,"audit_log_viewed","audit_logs");
     const limit=Math.min(200,Math.max(1,Number(url.searchParams.get("limit"))||100));
     const rows=await env.DB.prepare("SELECT id,actor_username,action,target,result,details_json,created_at FROM audit_logs ORDER BY id DESC LIMIT ?").bind(limit).all();
     return json({events:rows.results||[]});
