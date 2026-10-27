@@ -97,13 +97,17 @@ async function handle(request, env) {
 
   if (path === "/api/profile" && request.method === "PATCH") {
     const data = await body(request);
+    const username = typeof data?.username === "string" ? data.username.trim() : "";
     const displayName = typeof data?.display_name === "string" ? data.display_name.trim() : "";
     const avatarUrl = typeof data?.avatar_url === "string" ? data.avatar_url.trim() : "";
+    if (!/^[a-zA-Z0-9._-]{3,64}$/.test(username)) return fail("Username must be 3-64 characters using letters, numbers, dots, underscores, or hyphens.");
     if (!displayName || displayName.length > 80) return fail("Display name must be between 1 and 80 characters.");
     if (avatarUrl.length > 280000 || (avatarUrl && !/^https:\/\//i.test(avatarUrl) && !/^data:image\/(png|jpeg|webp);base64,/i.test(avatarUrl))) return fail("Use an HTTPS image URL or upload a PNG, JPEG, or WebP image under 180 KB.");
-    await env.DB.prepare("UPDATE users SET display_name=?,avatar_url=?,updated_at=? WHERE id=?").bind(displayName, avatarUrl, new Date().toISOString(), user.id).run();
-    await audit(env, user, "profile_updated", user.username, "success", { display_name_changed: displayName !== (user.display_name || user.username), avatar_changed: avatarUrl !== (user.avatar_url || "") });
-    return json({ ok: true, user: { id: user.id, username: user.username, display_name: displayName, avatar_url: avatarUrl, role: user.role } });
+    const existing = await env.DB.prepare("SELECT id FROM users WHERE username=? COLLATE NOCASE AND id<>?").bind(username, user.id).first();
+    if (existing) return fail("That username is already taken.", 409);
+    await env.DB.prepare("UPDATE users SET username=?,display_name=?,avatar_url=?,updated_at=? WHERE id=?").bind(username, displayName, avatarUrl, new Date().toISOString(), user.id).run();
+    await audit(env, user, "profile_updated", user.username, "success", { username_changed: username !== user.username, display_name_changed: displayName !== (user.display_name || user.username), avatar_changed: avatarUrl !== (user.avatar_url || "") });
+    return json({ ok: true, user: { id: user.id, username, display_name: displayName, avatar_url: avatarUrl, role: user.role } });
   }
   if (path === "/api/servers" && request.method === "GET") {
     const rows = await env.DB.prepare("SELECT c.id,c.name,c.description,c.invite_code,cm.class_role AS server_role,(SELECT COUNT(*) FROM class_members members WHERE members.class_id=c.id) AS member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id AND cm.user_id=? ORDER BY c.name LIMIT 200").bind(user.id).all();
