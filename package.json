@@ -1,0 +1,16 @@
+{
+  "name": "campusly",
+  "version": "0.1.0",
+  "private": true,
+  "description": "School collaboration platform with class chats, direct messages, roles, and audit logs.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 execute campusly-db --local --file=./schema.sql",
+    "db:remote": "wrangler d1 execute campusly-db --remote --file=./schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
