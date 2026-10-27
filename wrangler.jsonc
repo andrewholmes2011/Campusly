@@ -12,7 +12,7 @@
     {
       "binding": "DB",
       "database_name": "campusly-db",
-      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "database_id": "522ffcc1-5b22-44eb-9761-300e2bc64b43",
       "migrations_dir": "migrations"
     }
   ],
