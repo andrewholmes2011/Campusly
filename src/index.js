@@ -248,10 +248,10 @@ async function handle(request, env) {
     return json({ok:true,id:classId},201);
   }
   if(path==="/api/admin/channels"&&request.method==="POST"){
-    if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
     const data=await body(request);const classId=String(data?.class_id||"");const name=typeof data?.name==="string"?data.name.trim().toLowerCase().replace(/[^a-z0-9-]/g,"-").replace(/-+/g,"-"):"";const description=typeof data?.description==="string"?data.description.trim().slice(0,500):"";
-    if(!classId||!name||name.length>80)return fail("Class and valid channel name are required.");
-    const cls=await env.DB.prepare("SELECT id FROM classes WHERE id=?").bind(classId).first();if(!cls)return fail("Class not found.",404);
+    if(!classId||!name||name.length>80)return fail("Server and valid channel name are required.");
+    if(!requireRole(user,ADMIN_ROLES)){const canManage=await env.DB.prepare("SELECT 1 AS ok FROM class_members WHERE class_id=? AND user_id=? AND class_role='teacher'").bind(classId,user.id).first();if(!canManage)return fail("Only this server's owner or an administrator can create channels.",403);}
+    const cls=await env.DB.prepare("SELECT id FROM classes WHERE id=?").bind(classId).first();if(!cls)return fail("Server not found.",404);
     const channelId=id();await env.DB.prepare("INSERT INTO channels(id,class_id,name,description,created_by) VALUES(?,?,?,?,?)").bind(channelId,classId,name,description,user.id).run();
     await audit(env,user,"channel_created",name,"success",{class_id:classId});
     return json({ok:true,id:channelId},201);
