@@ -3,6 +3,9 @@
   "name": "campusly",
   "main": "src/index.js",
   "compatibility_date": "2026-10-26",
+  "vars": {
+    "ADMIN_USERNAME": "siteadmin"
+  },
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
