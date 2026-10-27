@@ -62,6 +62,7 @@ async function seedAdmin(env) {
 }
 async function handle(request, env) {
   if (!env.DB) return fail("Database binding is missing. Configure the Campusly D1 database.", 503);
+  await seedAdmin(env);
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/$/, "") || "/";
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS", "access-control-allow-headers": "content-type", "access-control-max-age": "86400", "vary": "Origin" } });
