@@ -237,7 +237,34 @@ async function handle(request, env) {
   }
   if(path==="/api/admin/reports"&&request.method==="GET"){
     if(!requireRole(user,STAFF_ROLES))return fail("Moderator permission required.",403);
+    const rows=await env.DB.prepare("SELECT r.id,r.target_type,r.target_id,r.reason,r.status,r.created_at,u.username AS reporter FROM reports r JOIN users u ON u.id=r.reporter_id ORDER BY CASE r.status WHEN 'open' THEN 0 WHEN 'reviewing' THEN 1 ELSE 2 END,r.created_at DESC LIMIT 200").all();return json({reports:rows.results||[]});
+  }
+  const reportStatusRoute=path.match(/^\/api\/admin\/reports\/([^/]+)$/);
+  if(reportStatusRoute&&request.method==="PATCH"){
+    if(!requireRole(user,STAFF_ROLES))return fail("Moderator permission required.",403);
+    const data=await body(request);
+    const status=String(data?.status||"");
+    if(!["open","reviewing","resolved","dismissed"].includes(status))return fail("Invalid report status.");
+    const reportId=decodeURIComponent(reportStatusRoute[1]);
+    const report=await env.DB.prepare("SELECT id,status FROM reports WHERE id=?").bind(reportId).first();
+    if(!report)return fail("Report not found.",404);
+    const resolvedAt=["resolved","dismissed"].includes(status)?new Date().toISOString():null;
+    await env.DB.prepare("UPDATE reports SET status=?,assigned_to=?,resolved_at=? WHERE id=?").bind(status,["resolved","dismissed"].includes(status)?user.id:(status==="reviewing"?user.id:null),resolvedAt,reportId).run();
+    await audit(env,user,"report_status_changed",reportId,"success",{from:report.status,to:status});
+    return json({ok:true,status});
+  }
+  if(path==="/api/search"&&request.method==="GET"){
+    const q=String(url.searchParams.get("q")||"").trim().slice(0,100);
+    if(q.length<2)return fail("Enter at least 2 characters to search.");
+    const pattern="%"+q.replace(/[%_]/g,"\\  if(path==="/api/admin/reports"&&request.method==="GET"){
+    if(!requireRole(user,STAFF_ROLES))return fail("Moderator permission required.",403);
     const rows=await env.DB.prepare("SELECT r.id,r.target_type,r.target_id,r.reason,r.status,r.created_at,u.username AS reporter FROM reports r JOIN users u ON u.id=r.reporter_id ORDER BY r.created_at DESC LIMIT 200").all();return json({reports:rows.results||[]});
+  }
+  return fail("Not found.",404);")+"%";
+    const channels=await env.DB.prepare("SELECT ch.id,ch.name,ch.description,ch.class_id,c.name AS class_name FROM channels ch JOIN classes c ON c.id=ch.class_id JOIN class_members cm ON cm.class_id=c.id AND cm.user_id=? WHERE (ch.visibility='class' OR EXISTS(SELECT 1 FROM channel_members x WHERE x.channel_id=ch.id AND x.user_id=?)) AND (ch.name LIKE ? ESCAPE '\\' OR ch.description LIKE ? ESCAPE '\\') ORDER BY c.name,ch.name LIMIT 30").bind(user.id,user.id,pattern,pattern).all();
+    const messages=await env.DB.prepare("SELECT m.id,m.content,m.created_at,u.username,ch.id AS channel_id,ch.name AS channel_name,c.name AS class_name FROM messages m JOIN channels ch ON ch.id=m.channel_id JOIN classes c ON c.id=ch.class_id JOIN class_members cm ON cm.class_id=c.id AND cm.user_id=? JOIN users u ON u.id=m.sender_id WHERE m.deleted_at IS NULL AND (ch.visibility='class' OR EXISTS(SELECT 1 FROM channel_members x WHERE x.channel_id=ch.id AND x.user_id=?)) AND m.content LIKE ? ESCAPE '\\' ORDER BY m.created_at DESC LIMIT 50").bind(user.id,user.id,pattern).all();
+    const directMessages=await env.DB.prepare("SELECT dm.id,dm.content,dm.created_at,u.username,dm.conversation_id FROM direct_messages dm JOIN conversation_members mine ON mine.conversation_id=dm.conversation_id AND mine.user_id=? JOIN users u ON u.id=dm.sender_id WHERE dm.deleted_at IS NULL AND dm.content LIKE ? ESCAPE '\\' ORDER BY dm.created_at DESC LIMIT 30").bind(user.id,pattern).all();
+    return json({query:q,channels:channels.results||[],messages:messages.results||[],direct_messages:directMessages.results||[]});
   }
   return fail("Not found.",404);
 }
