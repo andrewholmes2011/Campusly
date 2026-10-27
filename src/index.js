@@ -237,28 +237,10 @@ async function handle(request, env) {
   }
   if(path==="/api/admin/reports"&&request.method==="GET"){
     if(!requireRole(user,STAFF_ROLES))return fail("Moderator permission required.",403);
-    const rows=await env.DB.prepare("SELECT r.id,r.target_type,r.target_id,r.reason,r.status,r.created_at,u.username AS reporter FROM reports r JOIN users u ON u.id=r.reporter_id ORDER BY CASE r.status WHEN 'open' THEN 0 WHEN 'reviewing' THEN 1 ELSE 2 END,r.created_at DESC LIMIT 200").all();return json({reports:rows.results||[]});
-  }
-  const reportStatusRoute=path.match(/^\/api\/admin\/reports\/([^/]+)$/);
-  if(reportStatusRoute&&request.method==="PATCH"){
-    if(!requireRole(user,STAFF_ROLES))return fail("Moderator permission required.",403);
-    const data=await body(request);
-    const status=String(data?.status||"");
-    if(!["open","reviewing","resolved","dismissed"].includes(status))return fail("Invalid report status.");
-    const reportId=decodeURIComponent(reportStatusRoute[1]);
-    const report=await env.DB.prepare("SELECT id,status FROM reports WHERE id=?").bind(reportId).first();
-    if(!report)return fail("Report not found.",404);
-    const resolvedAt=["resolved","dismissed"].includes(status)?new Date().toISOString():null;
-    await env.DB.prepare("UPDATE reports SET status=?,assigned_to=?,resolved_at=? WHERE id=?").bind(status,["resolved","dismissed"].includes(status)?user.id:(status==="reviewing"?user.id:null),resolvedAt,reportId).run();
-    await audit(env,user,"report_status_changed",reportId,"success",{from:report.status,to:status});
-    return json({ok:true,status});
-  }
-  if(path==="/api/admin/reports"&&request.method==="GET"){
-    if(!requireRole(user,STAFF_ROLES))return fail("Moderator permission required.",403);
     const rows=await env.DB.prepare("SELECT r.id,r.target_type,r.target_id,r.reason,r.status,r.created_at,u.username AS reporter FROM reports r JOIN users u ON u.id=r.reporter_id ORDER BY CASE r.status WHEN 'open' THEN 0 WHEN 'reviewing' THEN 1 ELSE 2 END,r.created_at DESC LIMIT 200").all();
     return json({reports:rows.results||[]});
   }
-  const reportStatusRoute=path.match(/^\\/api\\/admin\\/reports\\/([^/]+)$/);
+  const reportStatusRoute=path.match(/^\/api\/admin\/reports\/([^/]+)$/);
   if(reportStatusRoute&&request.method==="PATCH"){
     if(!requireRole(user,STAFF_ROLES))return fail("Moderator permission required.",403);
     const data=await body(request);
