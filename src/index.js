@@ -36,7 +36,7 @@ async function currentUser(request, env) {
   const token = cookieValue(request, "campusly_session");
   if (!token) return null;
   const idHash = await digest(token);
-  const row = await env.DB.prepare("SELECT u.id,u.username,u.role,u.status,u.created_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id_hash=? AND s.expires_at>? LIMIT 1").bind(idHash, new Date().toISOString()).first();
+  const row = await env.DB.prepare("SELECT u.id,u.username,u.display_name,u.avatar_url,u.role,u.status,u.created_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id_hash=? AND s.expires_at>? LIMIT 1").bind(idHash, new Date().toISOString()).first();
   return row && row.status === "active" ? row : null;
 }
 function requireRole(user, roles) { return !!user && roles.has(user.role); }
@@ -71,7 +71,7 @@ async function handle(request, env) {
   if (path === "/api/auth/login" && request.method === "POST") {
     const data = await body(request);
     if (!data || typeof data.username !== "string" || typeof data.password !== "string" || data.username.length > 64 || data.password.length > 256) return fail("Enter a valid username and password.", 400);
-    const user = await env.DB.prepare("SELECT id,username,password_hash,role,status FROM users WHERE username=? COLLATE NOCASE LIMIT 1").bind(data.username.trim()).first();
+    const user = await env.DB.prepare("SELECT id,username,display_name,avatar_url,password_hash,role,status FROM users WHERE username=? COLLATE NOCASE LIMIT 1").bind(data.username.trim()).first();
     if (!user || user.status !== "active" || !(await verifyPassword(data.password, user.password_hash))) {
       await audit(env, user ? { id: user.id, username: user.username } : null, "login_failed", data.username.trim().slice(0,64), "denied", { reason: "invalid_credentials" });
       return fail("Invalid username or password.", 401);
@@ -81,7 +81,7 @@ async function handle(request, env) {
     await env.DB.prepare("INSERT INTO sessions(id_hash,user_id,expires_at,user_agent) VALUES(?,?,?,?)").bind(await digest(token), user.id, expires, (request.headers.get("User-Agent") || "").slice(0,240)).run();
     await env.DB.prepare("UPDATE users SET last_login_at=?,updated_at=? WHERE id=?").bind(new Date().toISOString(), new Date().toISOString(), user.id).run();
     await audit(env, user, "login_success", user.username);
-    return json({ user: { id: user.id, username: user.username, role: user.role } }, 200, { "set-cookie": cookieHeader(token, SESSION_DAYS * 86400) });
+    return json({ user: { id: user.id, username: user.username, display_name: user.display_name || user.username, avatar_url: user.avatar_url || "", role: user.role } }, 200, { "set-cookie": cookieHeader(token, SESSION_DAYS * 86400) });
   }
   if (path === "/api/auth/logout" && request.method === "POST") {
     const user = await currentUser(request, env);
@@ -95,6 +95,45 @@ async function handle(request, env) {
   if (!user) return fail("Authentication required.", 401);
   if (user.status !== "active") return fail("Account is not active.", 403);
 
+  if (path === "/api/profile" && request.method === "PATCH") {
+    const data = await body(request);
+    const displayName = typeof data?.display_name === "string" ? data.display_name.trim() : "";
+    const avatarUrl = typeof data?.avatar_url === "string" ? data.avatar_url.trim() : "";
+    if (!displayName || displayName.length > 80) return fail("Display name must be between 1 and 80 characters.");
+    if (avatarUrl.length > 280000 || (avatarUrl && !/^https:\/\//i.test(avatarUrl) && !/^data:image\/(png|jpeg|webp);base64,/i.test(avatarUrl))) return fail("Use an HTTPS image URL or upload a PNG, JPEG, or WebP image under 180 KB.");
+    await env.DB.prepare("UPDATE users SET display_name=?,avatar_url=?,updated_at=? WHERE id=?").bind(displayName, avatarUrl, new Date().toISOString(), user.id).run();
+    await audit(env, user, "profile_updated", user.username, "success", { display_name_changed: displayName !== (user.display_name || user.username), avatar_changed: avatarUrl !== (user.avatar_url || "") });
+    return json({ ok: true, user: { id: user.id, username: user.username, display_name: displayName, avatar_url: avatarUrl, role: user.role } });
+  }
+  if (path === "/api/servers" && request.method === "GET") {
+    const rows = await env.DB.prepare("SELECT c.id,c.name,c.description,c.invite_code,cm.class_role AS server_role,(SELECT COUNT(*) FROM class_members members WHERE members.class_id=c.id) AS member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id AND cm.user_id=? ORDER BY c.name LIMIT 200").bind(user.id).all();
+    return json({ servers: rows.results || [] });
+  }
+  if (path === "/api/servers" && request.method === "POST") {
+    const data = await body(request);
+    const name = typeof data?.name === "string" ? data.name.trim() : "";
+    const description = typeof data?.description === "string" ? data.description.trim().slice(0, 500) : "";
+    if (!name || name.length > 80) return fail("Server name must be between 1 and 80 characters.");
+    const serverId = id();
+    const inviteCode = toHex(crypto.getRandomValues(new Uint8Array(5)));
+    await env.DB.prepare("INSERT INTO classes(id,name,description,created_by,invite_code) VALUES(?,?,?,?,?)").bind(serverId, name, description, user.id, inviteCode).run();
+    await env.DB.prepare("INSERT INTO class_members(class_id,user_id,class_role) VALUES(?,?,'teacher')").bind(serverId, user.id).run();
+    const channelId = id();
+    await env.DB.prepare("INSERT INTO channels(id,class_id,name,description,visibility,created_by) VALUES(?,?, 'general','General server chat','class',?)").bind(channelId, serverId, user.id).run();
+    await audit(env, user, "server_created", name, "success", { server_id: serverId });
+    return json({ ok: true, server: { id: serverId, name, description, invite_code: inviteCode, server_role: "teacher", member_count: 1 } }, 201);
+  }
+  if (path === "/api/servers/join" && request.method === "POST") {
+    const data = await body(request);
+    const code = typeof data?.invite_code === "string" ? data.invite_code.trim().toLowerCase() : "";
+    if (!/^[a-f0-9]{8,10}$/.test(code)) return fail("Enter a valid server invite code.");
+    const server = await env.DB.prepare("SELECT id,name FROM classes WHERE invite_code=?").bind(code).first();
+    if (!server) return fail("That server invite code was not found.", 404);
+    const prior = await env.DB.prepare("SELECT 1 AS ok FROM class_members WHERE class_id=? AND user_id=?").bind(server.id, user.id).first();
+    await env.DB.prepare("INSERT INTO class_members(class_id,user_id,class_role) VALUES(?,?,'student') ON CONFLICT(class_id,user_id) DO NOTHING").bind(server.id, user.id).run();
+    if (!prior) await audit(env, user, "server_joined", server.name, "success", { server_id: server.id });
+    return json({ ok: true, server: { id: server.id, name: server.name } });
+  }
   if (path === "/api/channels" && request.method === "GET") {
     const rows = await env.DB.prepare("SELECT ch.id,ch.name,ch.description,ch.visibility,ch.class_id,c.name AS class_name FROM channels ch JOIN classes c ON c.id=ch.class_id JOIN class_members cm ON cm.class_id=c.id AND cm.user_id=? WHERE ch.visibility='class' OR EXISTS(SELECT 1 FROM channel_members x WHERE x.channel_id=ch.id AND x.user_id=?) ORDER BY c.name,ch.name LIMIT 300").bind(user.id,user.id).all();
     return json({ channels: rows.results || [] });
@@ -105,7 +144,7 @@ async function handle(request, env) {
     const member = await env.DB.prepare("SELECT ch.id FROM channels ch JOIN class_members cm ON cm.class_id=ch.class_id AND cm.user_id=? WHERE ch.id=? AND (ch.visibility='class' OR EXISTS(SELECT 1 FROM channel_members x WHERE x.channel_id=ch.id AND x.user_id=?))").bind(user.id,channelId,user.id).first();
     if (!member) return fail("Channel not found or access denied.", 404);
     if (request.method === "GET") {
-      const rows = await env.DB.prepare("SELECT m.id,m.content,m.created_at,u.username FROM messages m JOIN users u ON u.id=m.sender_id WHERE m.channel_id=? AND m.deleted_at IS NULL ORDER BY m.created_at DESC LIMIT 100").bind(channelId).all();
+      const rows = await env.DB.prepare("SELECT m.id,m.content,m.created_at,u.username,u.display_name,u.avatar_url FROM messages m JOIN users u ON u.id=m.sender_id WHERE m.channel_id=? AND m.deleted_at IS NULL ORDER BY m.created_at DESC LIMIT 100").bind(channelId).all();
       return json({ messages: (rows.results || []).reverse() });
     }
     if (request.method === "POST") {
@@ -146,7 +185,7 @@ async function handle(request, env) {
     const membership=await env.DB.prepare("SELECT 1 AS ok FROM conversation_members WHERE conversation_id=? AND user_id=?").bind(conversationId,user.id).first();
     if(!membership) return fail("Conversation not found or access denied.",404);
     if(request.method==="GET"){
-      const rows=await env.DB.prepare("SELECT dm.id,dm.content,dm.created_at,u.username FROM direct_messages dm JOIN users u ON u.id=dm.sender_id WHERE dm.conversation_id=? AND dm.deleted_at IS NULL ORDER BY dm.created_at DESC LIMIT 100").bind(conversationId).all();
+      const rows=await env.DB.prepare("SELECT dm.id,dm.content,dm.created_at,u.username,u.display_name,u.avatar_url FROM direct_messages dm JOIN users u ON u.id=dm.sender_id WHERE dm.conversation_id=? AND dm.deleted_at IS NULL ORDER BY dm.created_at DESC LIMIT 100").bind(conversationId).all();
       return json({messages:(rows.results||[]).reverse()});
     }
     if(request.method==="POST"){
