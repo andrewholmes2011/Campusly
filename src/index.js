@@ -45,6 +45,38 @@ async function requireUser(request, env) {
   return user || null;
 }
 function id() { return uuid(); }
+
+const DEFAULT_CLASS_SERVERS = [
+  { name: "AP Human Geography", description: "Human geography, migration, culture, population, and spatial patterns.", channels: [["general","Class discussion"],["announcements","Class updates and reminders"],["homework-help","Homework questions and study help"],["map-skills","Maps, regions, and spatial analysis"],["resources","Study guides and class resources"],["projects","Group projects"]] },
+  { name: "English Language Arts", description: "Reading, writing, literature, and communication.", channels: [["general","Class discussion"],["announcements","Class updates and reminders"],["homework-help","Writing and reading assignment help"],["reading-discussion","Discuss class readings"],["writing-workshop","Drafts, feedback, and writing tips"],["resources","Class resources"]] },
+  { name: "Algebra 1", description: "Equations, functions, graphing, and algebra practice.", channels: [["general","Class discussion"],["announcements","Class updates and reminders"],["homework-help","Help with assignments"],["show-your-work","Explain problem-solving steps"],["test-review","Review for quizzes and tests"],["resources","Formula sheets and practice resources"]] },
+  { name: "Earth Science", description: "Earth systems, weather, geology, space, and scientific investigation.", channels: [["general","Class discussion"],["announcements","Class updates and reminders"],["homework-help","Assignment questions"],["lab-discussion","Discuss lab concepts and observations"],["study-guides","Review guides and vocabulary"],["resources","Class resources"]] },
+  { name: "AVID", description: "Organization, academic skills, collaboration, and college/career readiness.", channels: [["general","Class discussion"],["announcements","Class updates and reminders"],["tutorials","Tutorial and inquiry questions"],["organization","Planners, binders, and study habits"],["college-career","College and career exploration"],["community-service","Community involvement and service"]] },
+  { name: "Health", description: "Health education, wellness, and class assignments.", channels: [["general","Class discussion"],["announcements","Class updates and reminders"],["homework-help","Assignment questions"],["study-guides","Review guides and vocabulary"],["resources","Class resources"]] },
+  { name: "Chamber Choir", description: "Choir announcements, rehearsal preparation, and music activities.", channels: [["general","Choir community"],["announcements","Rehearsal and performance updates"],["rehearsal-prep","Practice notes and preparation"],["performances","Concerts and event coordination"],["resources","Approved class materials and resources"]] },
+  { name: "Computer Science", description: "Programming, computational thinking, and technology projects.", channels: [["general","Class discussion"],["announcements","Class updates and reminders"],["coding-help","Programming questions and debugging"],["projects","Project collaboration"],["showcase","Share completed class projects"],["resources","Class resources and references"]] },
+  { name: "World Languages", description: "Language practice, vocabulary, and cultural learning.", channels: [["general","Class discussion"],["announcements","Class updates and reminders"],["homework-help","Assignment questions"],["vocabulary-practice","Vocabulary and practice"],["culture","Cultural topics and class activities"],["resources","Class resources"]] },
+  { name: "Physical Education", description: "PE class announcements, assignments, and activity information.", channels: [["general","Class discussion"],["announcements","Class updates and reminders"],["assignments","Class assignments"],["resources","Class resources"]] },
+  { name: "Fine Arts & Electives", description: "Creative projects, electives, and cross-class collaboration.", channels: [["general","Class discussion"],["announcements","Class updates and reminders"],["projects","Project collaboration"],["showcase","Share work and ideas"],["resources","Class resources"]] }
+];
+async function ensureDefaultClassServers(env, actor) {
+  for (const template of DEFAULT_CLASS_SERVERS) {
+    let cls = await env.DB.prepare("SELECT id FROM classes WHERE name=? COLLATE NOCASE LIMIT 1").bind(template.name).first();
+    if (!cls) {
+      const classId = id();
+      const inviteCode = toHex(crypto.getRandomValues(new Uint8Array(5)));
+      await env.DB.prepare("INSERT INTO classes(id,name,description,created_by,invite_code) VALUES(?,?,?,NULL,?)").bind(classId, template.name, template.description, inviteCode).run();
+      cls = { id: classId };
+    }
+    for (const [name, description] of template.channels) {
+      const existing = await env.DB.prepare("SELECT id FROM channels WHERE class_id=? AND name=? COLLATE NOCASE LIMIT 1").bind(cls.id, name).first();
+      if (!existing) {
+        await env.DB.prepare("INSERT INTO channels(id,class_id,name,description,visibility,created_by) VALUES(?,?,?,?, 'class', NULL)").bind(id(), cls.id, name, description).run();
+      }
+    }
+  }
+}
+
 async function seedAdmin(env) {
   if (!env.ADMIN_USERNAME || !env.CAMPUSLY_BOOTSTRAP_ADMIN_PASSWORD) return;
   const username = String(env.ADMIN_USERNAME).trim();
@@ -109,6 +141,24 @@ async function handle(request, env) {
     await audit(env, user, "profile_updated", user.username, "success", { username_changed: username !== user.username, display_name_changed: displayName !== (user.display_name || user.username), avatar_changed: avatarUrl !== (user.avatar_url || "") });
     return json({ ok: true, user: { id: user.id, username, display_name: displayName, avatar_url: avatarUrl, role: user.role } });
   }
+
+  if (path === "/api/class-catalog" && request.method === "GET") {
+    await ensureDefaultClassServers(env, user);
+    const rows = await env.DB.prepare("SELECT c.id,c.name,c.description,(SELECT COUNT(*) FROM class_members cm2 WHERE cm2.class_id=c.id) AS member_count,EXISTS(SELECT 1 FROM class_members cm WHERE cm.class_id=c.id AND cm.user_id=?) AS joined,(SELECT GROUP_CONCAT(ch.name, ', ') FROM channels ch WHERE ch.class_id=c.id) AS channel_names FROM classes c ORDER BY CASE c.name WHEN 'AP Human Geography' THEN 1 WHEN 'English Language Arts' THEN 2 WHEN 'Algebra 1' THEN 3 WHEN 'Earth Science' THEN 4 WHEN 'AVID' THEN 5 WHEN 'Health' THEN 6 WHEN 'Chamber Choir' THEN 7 WHEN 'Computer Science' THEN 8 WHEN 'World Languages' THEN 9 WHEN 'Physical Education' THEN 10 WHEN 'Fine Arts & Electives' THEN 11 ELSE 99 END,c.name LIMIT 200").bind(user.id).all();
+    return json({ classes: (rows.results || []).map(row => ({ ...row, joined: Boolean(row.joined) })) });
+  }
+  if (path === "/api/class-catalog/join" && request.method === "POST") {
+    const data = await body(request);
+    const classId = typeof data?.class_id === "string" ? data.class_id : "";
+    if (!classId) return fail("Choose a class server to join.");
+    const cls = await env.DB.prepare("SELECT id,name FROM classes WHERE id=?").bind(classId).first();
+    if (!cls) return fail("Class server not found.", 404);
+    const prior = await env.DB.prepare("SELECT 1 AS ok FROM class_members WHERE class_id=? AND user_id=?").bind(classId,user.id).first();
+    await env.DB.prepare("INSERT INTO class_members(class_id,user_id,class_role) VALUES(?,?,'student') ON CONFLICT(class_id,user_id) DO NOTHING").bind(classId,user.id).run();
+    if (!prior) await audit(env,user,"default_class_joined",cls.name,"success",{class_id:classId});
+    return json({ok:true,server:{id:cls.id,name:cls.name}});
+  }
+
   if (path === "/api/servers" && request.method === "GET") {
     const rows = await env.DB.prepare("SELECT c.id,c.name,c.description,c.invite_code,cm.class_role AS server_role,(SELECT COUNT(*) FROM class_members members WHERE members.class_id=c.id) AS member_count FROM classes c JOIN class_members cm ON cm.class_id=c.id AND cm.user_id=? ORDER BY c.name LIMIT 200").bind(user.id).all();
     return json({ servers: rows.results || [] });
