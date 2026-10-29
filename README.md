@@ -81,3 +81,8 @@ Do not use real student data in local development.
 - Server/channel URL aliases are human-readable, but they are not a replacement for authorization or a formally managed server-code registry.
 - This is not a security-audited school communications service. Before real student use, add appropriate rate limiting, account recovery, retention controls, operational monitoring, and a school-approved privacy/safeguarding review.
 
+
+
+## Administration redesign
+
+Campusly includes a school-hub interface and an administrator control center for account lifecycle management, class and channel management, site-wide configuration, announcements, moderation reports, and audit review. Site settings and announcement records are stored in D1. The administration APIs enforce administrator access server-side, revoke sessions after account security changes, and prevent disabling or demoting the final active administrator.

@@ -98,11 +98,20 @@ async function seedAdmin(env) {
 async function handle(request, env) {
   if (!env.DB) return fail("Database binding is missing. Configure the Campusly D1 database.", 503);
   await seedAdmin(env);
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS site_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL, updated_by TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS announcements (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, audience TEXT NOT NULL DEFAULT 'all', pinned INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)").run();
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/$/, "") || "/";
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS", "access-control-allow-headers": "content-type", "access-control-max-age": "86400", "vary": "Origin" } });
   if (path.startsWith("/api/") && !isSecureOrigin(request)) return fail("Cross-origin request rejected.", 403);
   if (path === "/api/health" && request.method === "GET") return json({ ok: true, service: "Campusly API" });
+
+  if (path === "/api/site-config" && request.method === "GET") {
+    const rows = await env.DB.prepare("SELECT setting_key,setting_value FROM site_settings WHERE setting_key IN ('site_name','school_name','tagline','announcement_banner','accent_color','support_url','maintenance_mode','max_message_length')").all();
+    const settings = Object.fromEntries((rows.results||[]).map(r=>[r.setting_key,(()=>{try{return JSON.parse(r.setting_value)}catch{return r.setting_value}})()]));
+    return json({settings:{site_name:settings.site_name||"Campusly",school_name:settings.school_name||"",tagline:settings.tagline||"Your school community, connected.",announcement_banner:settings.announcement_banner||"",accent_color:settings.accent_color||"#4867e8",support_url:settings.support_url||"",maintenance_mode:!!settings.maintenance_mode,max_message_length:Number(settings.max_message_length)||4000}});
+  }
+
   if (path === "/api/auth/login" && request.method === "POST") {
     const data = await body(request);
     if (!data || typeof data.username !== "string" || typeof data.password !== "string" || data.username.length > 64 || data.password.length > 256) return fail("Enter a valid username and password.", 400);
@@ -129,6 +138,8 @@ async function handle(request, env) {
   if (path === "/api/me" && request.method === "GET") return user ? json({ user }) : fail("Authentication required.", 401);
   if (!user) return fail("Authentication required.", 401);
   if (user.status !== "active") return fail("Account is not active.", 403);
+  const maintenanceSetting = await env.DB.prepare("SELECT setting_value FROM site_settings WHERE setting_key='maintenance_mode'").first();
+  if (maintenanceSetting && maintenanceSetting.setting_value === "true" && user.role !== "administrator") return fail("Campusly is temporarily in maintenance mode. Please try again later.", 503);
 
   if (path === "/api/profile" && request.method === "PATCH") {
     const data = await body(request);
@@ -145,6 +156,12 @@ async function handle(request, env) {
     return json({ ok: true, user: { id: user.id, username, display_name: displayName, avatar_url: avatarUrl, role: user.role } });
   }
 
+  if (path === "/api/announcements" && request.method === "GET") {
+    const audienceRoles = user.role === "student" ? ["all","students"] : user.role === "teacher" ? ["all","teachers","staff"] : ["all","staff"];
+    const placeholders = audienceRoles.map(() => "?").join(",");
+    const rows = await env.DB.prepare("SELECT id,title,body,audience,pinned,created_at,updated_at FROM announcements WHERE active=1 AND audience IN ("+placeholders+") ORDER BY pinned DESC,created_at DESC LIMIT 30").bind(...audienceRoles).all();
+    return json({announcements:rows.results||[]});
+  }
   if (path === "/api/class-catalog" && request.method === "GET") {
     await ensureDefaultClassServers(env, user);
     const rows = await env.DB.prepare("SELECT c.id,c.name,c.description,(SELECT COUNT(*) FROM class_members cm2 WHERE cm2.class_id=c.id) AS member_count,EXISTS(SELECT 1 FROM class_members cm WHERE cm.class_id=c.id AND cm.user_id=?) AS joined,(SELECT GROUP_CONCAT(ch.name, ', ') FROM channels ch WHERE ch.class_id=c.id) AS channel_names FROM classes c ORDER BY CASE c.name WHEN 'AP Human Geography' THEN 1 WHEN 'English Language Arts' THEN 2 WHEN 'Algebra 1' THEN 3 WHEN 'Earth Science' THEN 4 WHEN 'AVID' THEN 5 WHEN 'Health' THEN 6 WHEN 'Chamber Choir' THEN 7 WHEN 'Computer Science' THEN 8 WHEN 'World Languages' THEN 9 WHEN 'Physical Education' THEN 10 WHEN 'Fine Arts & Electives' THEN 11 ELSE 99 END,c.name LIMIT 200").bind(user.id).all();
@@ -269,7 +286,7 @@ async function handle(request, env) {
   }
   if (path === "/api/admin/users" && request.method === "GET") {
     if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
-    const rows=await env.DB.prepare("SELECT id,username,role,status,created_at,last_login_at FROM users ORDER BY created_at DESC LIMIT 500").all();
+    const rows=await env.DB.prepare("SELECT id,username,display_name,role,status,created_at,last_login_at FROM users ORDER BY created_at DESC LIMIT 500").all();
     return json({users:rows.results||[]});
   }
   const roleRoute=path.match(/^\/api\/admin\/users\/([^/]+)\/role$/);
@@ -413,6 +430,160 @@ async function handle(request, env) {
     await audit(env,user,"report_status_changed",reportId,"success",{from:report.status,to:status});
     return json({ok:true,status});
   }
+
+  // Administrative control-plane tables are created idempotently so the dashboard can be
+  // deployed without a separate manual migration step.
+  if (path.startsWith("/api/admin/")) {
+    await env.DB.prepare("CREATE TABLE IF NOT EXISTS site_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL, updated_by TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)").run();
+    await env.DB.prepare("CREATE TABLE IF NOT EXISTS announcements (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, audience TEXT NOT NULL DEFAULT 'all', pinned INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)").run();
+  }
+  if (path === "/api/admin/overview" && request.method === "GET") {
+    if (!requireRole(user, ADMIN_ROLES)) return fail("Administrator permission required.", 403);
+    const count = async (sql) => Number((await env.DB.prepare(sql).first())?.n || 0);
+    const [usersCount, activeUsers, classesCount, channelsCount, messagesCount, reportsCount, announcementsCount] = await Promise.all([
+      count("SELECT COUNT(*) n FROM users"),
+      count("SELECT COUNT(*) n FROM users WHERE status='active'"),
+      count("SELECT COUNT(*) n FROM classes"),
+      count("SELECT COUNT(*) n FROM channels"),
+      count("SELECT COUNT(*) n FROM messages WHERE deleted_at IS NULL"),
+      count("SELECT COUNT(*) n FROM reports WHERE status IN ('open','reviewing')"),
+      count("SELECT COUNT(*) n FROM announcements")
+    ]);
+    return json({stats:{users:usersCount,active_users:activeUsers,classes:classesCount,channels:channelsCount,messages:messagesCount,open_reports:reportsCount,announcements:announcementsCount}});
+  }
+  if (path === "/api/admin/settings" && request.method === "GET") {
+    if (!requireRole(user, ADMIN_ROLES)) return fail("Administrator permission required.", 403);
+    const rows = await env.DB.prepare("SELECT setting_key,setting_value,updated_at FROM site_settings ORDER BY setting_key").all();
+    const settings = Object.fromEntries((rows.results || []).map(r => [r.setting_key, (() => { try { return JSON.parse(r.setting_value); } catch { return r.setting_value; } })()]));
+    return json({settings});
+  }
+  if (path === "/api/admin/settings" && request.method === "PATCH") {
+    if (!requireRole(user, ADMIN_ROLES)) return fail("Administrator permission required.", 403);
+    const data = await body(request);
+    if (!data || typeof data !== "object" || Array.isArray(data)) return fail("Provide a settings object.");
+    const allowed = new Set(["site_name","school_name","tagline","announcement_banner","maintenance_mode","max_message_length","accent_color","support_url"]);
+    for (const [key,value] of Object.entries(data)) {
+      if (!allowed.has(key)) return fail("Setting is not editable: " + key);
+      if (["site_name","school_name","tagline","announcement_banner","accent_color","support_url"].includes(key) && typeof value !== "string") return fail("Invalid value for " + key);
+      if (key === "maintenance_mode" && typeof value !== "boolean") return fail("Invalid value for " + key);
+      if (key === "max_message_length" && (!Number.isInteger(value) || value < 100 || value > 4000)) return fail("Message length must be between 100 and 4000.");
+      const encoded = JSON.stringify(value);
+      await env.DB.prepare("INSERT INTO site_settings(setting_key,setting_value,updated_by,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP").bind(key,encoded,user.id).run();
+    }
+    await audit(env,user,"site_settings_updated","site_settings","success",{keys:Object.keys(data)});
+    return json({ok:true});
+  }
+  if (path === "/api/admin/announcements" && request.method === "GET") {
+    if (!requireRole(user, ADMIN_ROLES)) return fail("Administrator permission required.", 403);
+    const rows = await env.DB.prepare("SELECT a.id,a.title,a.body,a.audience,a.pinned,a.active,a.created_at,a.updated_at,u.username AS author FROM announcements a LEFT JOIN users u ON u.id=a.created_by ORDER BY a.pinned DESC,a.created_at DESC LIMIT 200").all();
+    return json({announcements:rows.results||[]});
+  }
+  if (path === "/api/admin/announcements" && request.method === "POST") {
+    if (!requireRole(user, ADMIN_ROLES)) return fail("Administrator permission required.", 403);
+    const data = await body(request);
+    const title = typeof data?.title === "string" ? data.title.trim().slice(0,160) : "";
+    const announcementBody = typeof data?.body === "string" ? data.body.trim().slice(0,5000) : "";
+    const audience = ["all","students","teachers","staff"].includes(data?.audience) ? data.audience : "all";
+    if (!title || !announcementBody) return fail("Announcement title and message are required.");
+    const announcementId = id();
+    await env.DB.prepare("INSERT INTO announcements(id,title,body,audience,pinned,active,created_by) VALUES(?,?,?,?,?,?,?)").bind(announcementId,title,announcementBody,audience,data?.pinned?1:0,data?.active===false?0:1,user.id).run();
+    await audit(env,user,"announcement_created",title,"success",{audience});
+    return json({ok:true,id:announcementId},201);
+  }
+  const announcementRoute = path.match(/^\/api\/admin\/announcements\/([^/]+)$/);
+  if (announcementRoute && request.method === "PATCH") {
+    if (!requireRole(user, ADMIN_ROLES)) return fail("Administrator permission required.", 403);
+    const announcementId = decodeURIComponent(announcementRoute[1]);
+    const data = await body(request);
+    const current = await env.DB.prepare("SELECT * FROM announcements WHERE id=?").bind(announcementId).first();
+    if (!current) return fail("Announcement not found.",404);
+    const title = typeof data?.title === "string" ? data.title.trim().slice(0,160) : current.title;
+    const announcementBody = typeof data?.body === "string" ? data.body.trim().slice(0,5000) : current.body;
+    const audience = data?.audience === undefined ? current.audience : data.audience;
+    if (!title || !announcementBody || !["all","students","teachers","staff"].includes(audience)) return fail("Invalid announcement details.");
+    const pinned = data?.pinned === undefined ? current.pinned : (data.pinned ? 1 : 0);
+    const active = data?.active === undefined ? current.active : (data.active ? 1 : 0);
+    await env.DB.prepare("UPDATE announcements SET title=?,body=?,audience=?,pinned=?,active=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(title,announcementBody,audience,pinned,active,announcementId).run();
+    await audit(env,user,"announcement_updated",announcementId,"success",{title,active:!!active});
+    return json({ok:true});
+  }
+  if (announcementRoute && request.method === "DELETE") {
+    if (!requireRole(user, ADMIN_ROLES)) return fail("Administrator permission required.",403);
+    const announcementId = decodeURIComponent(announcementRoute[1]);
+    const result = await env.DB.prepare("DELETE FROM announcements WHERE id=?").bind(announcementId).run();
+    if (!(result.meta?.changes)) return fail("Announcement not found.",404);
+    await audit(env,user,"announcement_deleted",announcementId);
+    return json({ok:true});
+  }
+  const adminUserRoute = path.match(/^\/api\/admin\/users\/([^/]+)$/);
+  if (adminUserRoute && request.method === "PATCH") {
+    if (!requireRole(user, ADMIN_ROLES)) return fail("Administrator permission required.",403);
+    const targetId = decodeURIComponent(adminUserRoute[1]);
+    const data = await body(request);
+    const target = await env.DB.prepare("SELECT id,username,role,status FROM users WHERE id=?").bind(targetId).first();
+    if (!target) return fail("User not found.",404);
+    const role = data?.role === undefined ? target.role : data.role;
+    const status = data?.status === undefined ? target.status : data.status;
+    const displayName = data?.display_name === undefined ? null : String(data.display_name).trim().slice(0,100);
+    const password = data?.password === undefined ? null : String(data.password);
+    if (!ROLES.includes(role)) return fail("Invalid role.");
+    if (!["active","suspended","disabled"].includes(status)) return fail("Invalid account status.");
+    if (targetId === user.id && (role !== "administrator" || status !== "active")) return fail("You cannot demote or disable your own administrator account.",403);
+    if (target.role === "administrator" && (role !== "administrator" || status !== "active")) {
+      const n = await env.DB.prepare("SELECT COUNT(*) n FROM users WHERE role='administrator' AND status='active'").first();
+      if (Number(n?.n || 0) <= 1) return fail("Campusly must retain at least one active administrator.",403);
+    }
+    if (password !== null && (password.length < 6 || password.length > 256)) return fail("Password must be between 6 and 256 characters.");
+    const hash = password === null ? null : await passwordHash(password);
+    await env.DB.prepare("UPDATE users SET role=?,status=?,display_name=COALESCE(?,display_name),password_hash=COALESCE(?,password_hash),updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(role,status,displayName,hash,targetId).run();
+    if (status !== "active" || password !== null) await env.DB.prepare("DELETE FROM sessions WHERE user_id=?").bind(targetId).run();
+    await audit(env,user,"user_updated",target.username,"success",{role,status,password_reset:password!==null});
+    return json({ok:true});
+  }
+  if (adminUserRoute && request.method === "DELETE") {
+    if (!requireRole(user, ADMIN_ROLES)) return fail("Administrator permission required.",403);
+    const targetId = decodeURIComponent(adminUserRoute[1]);
+    if (targetId === user.id) return fail("You cannot delete your own account.",403);
+    const target = await env.DB.prepare("SELECT id,username,role FROM users WHERE id=?").bind(targetId).first();
+    if (!target) return fail("User not found.",404);
+    if (target.role === "administrator") {
+      const n = await env.DB.prepare("SELECT COUNT(*) n FROM users WHERE role='administrator' AND status='active'").first();
+      if (Number(n?.n || 0) <= 1) return fail("You cannot remove the last active administrator.",403);
+    }
+    // Disable rather than hard-delete to preserve moderation/report/audit references.
+    await env.DB.prepare("UPDATE users SET status='disabled',updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(targetId).run();
+    await env.DB.prepare("DELETE FROM sessions WHERE user_id=?").bind(targetId).run();
+    await audit(env,user,"user_disabled",target.username,"success",{method:"admin_delete"});
+    return json({ok:true,disabled:true});
+  }
+  const adminChannelEdit = path.match(/^\/api\/admin\/channels\/([^/]+)$/);
+  if (adminChannelEdit && request.method === "PATCH") {
+    if (!requireRole(user, ADMIN_ROLES)) return fail("Administrator permission required.",403);
+    const channelId = decodeURIComponent(adminChannelEdit[1]);
+    const data = await body(request);
+    const current = await env.DB.prepare("SELECT id,name,description,visibility,class_id FROM channels WHERE id=?").bind(channelId).first();
+    if (!current) return fail("Channel not found.",404);
+    const name = data?.name === undefined ? current.name : String(data.name).trim().toLowerCase().replace(/[^a-z0-9-]/g,"-").replace(/-+/g,"-").replace(/^-|-$/g,"").slice(0,80);
+    const description = data?.description === undefined ? current.description : String(data.description).trim().slice(0,500);
+    const visibility = data?.visibility === undefined ? current.visibility : data.visibility;
+    if (!name || !["class","private"].includes(visibility)) return fail("Channel name or visibility is invalid.");
+    const duplicate = await env.DB.prepare("SELECT id FROM channels WHERE class_id=? AND name=? COLLATE NOCASE AND id<>?").bind(current.class_id,name,channelId).first();
+    if (duplicate) return fail("That channel name already exists in this class.",409);
+    await env.DB.prepare("UPDATE channels SET name=?,description=?,visibility=? WHERE id=?").bind(name,description,visibility,channelId).run();
+    await audit(env,user,"channel_updated",channelId,"success",{name,visibility});
+    return json({ok:true});
+  }
+  const classMembersRoute = path.match(/^\/api\/admin\/classes\/([^/]+)\/members\/([^/]+)$/);
+  if (classMembersRoute && request.method === "DELETE") {
+    if (!requireRole(user, ADMIN_ROLES)) return fail("Administrator permission required.",403);
+    const classId = decodeURIComponent(classMembersRoute[1]), targetId = decodeURIComponent(classMembersRoute[2]);
+    const result = await env.DB.prepare("DELETE FROM class_members WHERE class_id=? AND user_id=?").bind(classId,targetId).run();
+    if (!(result.meta?.changes)) return fail("Class membership not found.",404);
+    await env.DB.prepare("DELETE FROM channel_members WHERE user_id=? AND channel_id IN (SELECT id FROM channels WHERE class_id=?)").bind(targetId,classId).run();
+    await audit(env,user,"class_member_removed",classId,"success",{user_id:targetId});
+    return json({ok:true});
+  }
+
   if(path==="/api/search"&&request.method==="GET"){
     const q=String(url.searchParams.get("q")||"").trim().slice(0,100);
     if(q.length<2)return fail("Enter at least 2 characters to search.");
