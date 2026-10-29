@@ -1,0 +1,23 @@
+{
+  "id": "/",
+  "name": "Campusly — School collaboration",
+  "short_name": "Campusly",
+  "description": "Campusly school hub for class collaboration, messages, and shared spaces.",
+  "lang": "en-US",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#0d1117",
+  "theme_color": "#0d1117",
+  "categories": ["education", "social", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/campusly.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
