@@ -3,6 +3,13 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#0d1117"><meta name="description" content="Campusly — school collaboration, class chats, and project spaces.">
+<meta name="application-name" content="Campusly">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Campusly">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/campusly.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/campusly.svg">
 <title>Campusly — School collaboration</title>
 <style>
 :root{color-scheme:dark;--bg:#0d1117;--panel:#161b22;--panel2:#1c2128;--line:#30363d;--text:#e6edf3;--muted:#9198a1;--purple:#a78bfa;--blue:#79c0ff;--green:#3fb950;--red:#f85149}
@@ -441,6 +448,14 @@ async function start(){try{const cfg=await api("/site-config");state.siteSetting
 async function refreshOpenDM(){const id=state.dmOpenId;const el=$("#dmMessages");if(!id||!el||state.view!=="dms")return;try{const d=await api("/dms/"+encodeURIComponent(id)+"/messages");const messages=d.messages||[];const key=messages.map(m=>m.id).join("|");if(el.dataset.messageKey===key)return;const wasAtBottom=el.scrollHeight-el.scrollTop-el.clientHeight<80;el.dataset.messageKey=key;el.innerHTML=messages.map(m=>'<div class="listrow"><div class="details"><strong>'+esc(m.username)+' <small style="font-weight:400;color:var(--muted)">'+esc(new Date(m.created_at).toLocaleString())+'</small></strong><div>'+esc(m.content)+'</div></div></div>').join("")||'<div class="empty">Say hello to start the conversation.</div>';if(wasAtBottom)el.scrollTop=el.scrollHeight}catch(e){console.error("Live DM refresh failed",e)}}
 setInterval(()=>{if(document.visibilityState!=="visible")return;if(state.view==="channel"&&state.channel)loadMessages(state.channel.id);if(state.view==="dms"&&state.dmOpenId)refreshOpenDM()},250);
 start();
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(error => {
+      console.warn("Campusly offline support could not be enabled.", error);
+    });
+  });
+}
 </script>
 </body>
 </html>
