@@ -21,6 +21,24 @@ async function verifyPassword(password, stored) {
   const actual = toHex(bits);
   return actual.length === expected.length && actual === expected;
 }
+function normalizeSecretCode(code) { return String(code || "").trim().toUpperCase(); }
+function generateSecretCode() {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  let raw = "";
+  for (const byte of bytes) raw += alphabet[byte % alphabet.length];
+  return raw.slice(0,4) + "-" + raw.slice(4);
+}
+async function secretCodeHash(code) { return passwordHash(normalizeSecretCode(code), "campusly-secret-code-v1"); }
+async function issueSecretCode(env) {
+  for (let i=0; i<8; i++) {
+    const code = generateSecretCode();
+    const hash = await secretCodeHash(code);
+    const existing = await env.DB.prepare("SELECT id FROM users WHERE login_code_hash=?").bind(hash).first();
+    if (!existing) return { code, hash };
+  }
+  throw new Error("Could not allocate a unique sign-in code.");
+}
 function cookieValue(request, name) {
   const cookies = request.headers.get("Cookie") || "";
   const item = cookies.split(";").map(s => s.trim()).find(s => s.startsWith(name + "="));
@@ -112,18 +130,51 @@ async function handle(request, env) {
     return json({settings:{site_name:settings.site_name||"Campusly",school_name:settings.school_name||"",tagline:settings.tagline||"Your school community, connected.",announcement_banner:settings.announcement_banner||"",accent_color:settings.accent_color||"#4867e8",support_url:settings.support_url||"",maintenance_mode:!!settings.maintenance_mode,max_message_length:Number(settings.max_message_length)||4000}});
   }
 
+  if (path === "/api/auth/admin-code-setup" && request.method === "POST") {
+    const data = await body(request);
+    const configuredUsername = String(env.ADMIN_USERNAME || "siteadmin").trim();
+    const username = typeof data?.username === "string" ? data.username.trim() : "";
+    const password = typeof data?.password === "string" ? data.password : "";
+    if (username.toLowerCase() !== configuredUsername.toLowerCase() || password.length < 6 || password.length > 256) return fail("Use the existing site administrator username and password.", 400);
+    const admin = await env.DB.prepare("SELECT id,username,password_hash,role,status,login_code_hash FROM users WHERE username=? COLLATE NOCASE LIMIT 1").bind(configuredUsername).first();
+    if (!admin || admin.role !== "administrator" || admin.status !== "active" || !(await verifyPassword(password, admin.password_hash))) {
+      await audit(env, admin ? {id:admin.id,username:admin.username} : null, "admin_code_setup_failed", configuredUsername, "denied", {reason:"invalid_credentials_or_account"});
+      return fail("Administrator setup could not be verified.", 401);
+    }
+    if (admin.login_code_hash) return fail("This administrator already has a login code. Sign in with it or have an administrator reset it.", 409);
+    const issued = await issueSecretCode(env);
+    const replacementPasswordHash = await passwordHash(toHex(crypto.getRandomValues(new Uint8Array(32))));
+    await env.DB.prepare("UPDATE users SET login_code_hash=?,password_hash=?,updated_at=? WHERE id=? AND login_code_hash IS NULL").bind(issued.hash,replacementPasswordHash,new Date().toISOString(),admin.id).run();
+    await env.DB.prepare("DELETE FROM sessions WHERE user_id=?").bind(admin.id).run();
+    await audit(env, admin, "admin_secret_code_initialized", admin.username, "success");
+    return json({ok:true,username:admin.username,login_code:issued.code});
+  }
+
   if (path === "/api/auth/login" && request.method === "POST") {
     const data = await body(request);
-    if (!data || typeof data.username !== "string" || typeof data.password !== "string" || data.username.length > 64 || data.password.length > 256) return fail("Enter a valid username and password.", 400);
-    const user = await env.DB.prepare("SELECT id,username,display_name,avatar_url,password_hash,role,status FROM users WHERE username=? COLLATE NOCASE LIMIT 1").bind(data.username.trim()).first();
-    if (!user || user.status !== "active" || !(await verifyPassword(data.password, user.password_hash))) {
-      await audit(env, user ? { id: user.id, username: user.username } : null, "login_failed", data.username.trim().slice(0,64), "denied", { reason: "invalid_credentials" });
-      return fail("Invalid username or password.", 401);
+    const code = normalizeSecretCode(data?.code);
+    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    const ipHash = await digest("campusly-login-ip:" + ip);
+    const cutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+    const attempts = await env.DB.prepare("SELECT COUNT(*) AS n FROM auth_login_attempts WHERE ip_hash=? AND attempted_at>?").bind(ipHash,cutoff).first();
+    if (Number(attempts?.n || 0) >= 15) return fail("Too many sign-in attempts. Wait 15 minutes and try again.",429);
+    if (!/^[A-Z]{4}-[A-Z]{4}$/.test(code)) {
+      await env.DB.prepare("INSERT INTO auth_login_attempts(ip_hash,attempted_at) VALUES(?,?)").bind(ipHash,new Date().toISOString()).run();
+      await audit(env,null,"login_failed","secret_code","denied",{reason:"invalid_code_format"});
+      return fail("Enter a code in the format AOWJ-AODI.",400);
+    }
+    const codeHash = await secretCodeHash(code);
+    const user = await env.DB.prepare("SELECT id,username,display_name,avatar_url,role,status FROM users WHERE login_code_hash=? LIMIT 1").bind(codeHash).first();
+    if (!user || user.status !== "active") {
+      await env.DB.prepare("INSERT INTO auth_login_attempts(ip_hash,attempted_at) VALUES(?,?)").bind(ipHash,new Date().toISOString()).run();
+      await audit(env, user ? {id:user.id,username:user.username} : null, "login_failed", "secret_code", "denied", {reason:"invalid_code"});
+      return fail("That sign-in code is invalid or the account is not active.",401);
     }
     const token = toHex(crypto.getRandomValues(new Uint8Array(32)));
     const expires = new Date(Date.now() + SESSION_DAYS * 86400000).toISOString();
     await env.DB.prepare("INSERT INTO sessions(id_hash,user_id,expires_at,user_agent) VALUES(?,?,?,?)").bind(await digest(token), user.id, expires, (request.headers.get("User-Agent") || "").slice(0,240)).run();
     await env.DB.prepare("UPDATE users SET last_login_at=?,updated_at=? WHERE id=?").bind(new Date().toISOString(), new Date().toISOString(), user.id).run();
+    await env.DB.prepare("DELETE FROM auth_login_attempts WHERE ip_hash=?").bind(ipHash).run();
     await audit(env, user, "login_success", user.username);
     return json({ user: { id: user.id, username: user.username, display_name: user.display_name || user.username, avatar_url: user.avatar_url || "", role: user.role } }, 200, { "set-cookie": cookieHeader(token, SESSION_DAYS * 86400) });
   }
@@ -274,20 +325,31 @@ async function handle(request, env) {
   }
   if (path === "/api/admin/users" && request.method === "POST") {
     if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
-    const data=await body(request);const username=typeof data?.username==="string"?data.username.trim():"";const password=typeof data?.password==="string"?data.password:"";const role=data?.role||"student";
+    const data=await body(request);const username=typeof data?.username==="string"?data.username.trim():"";const role=data?.role||"student";
     if(!/^[a-zA-Z0-9._-]{3,64}$/.test(username))return fail("Username must be 3-64 characters using letters, numbers, dots, underscores, or hyphens.");
-    if(password.length<6||password.length>256)return fail("Set a unique initial password of at least 6 characters.");
     if(!ROLES.includes(role))return fail("Invalid role.");
     const exists=await env.DB.prepare("SELECT id FROM users WHERE username=? COLLATE NOCASE").bind(username).first();if(exists)return fail("That username is already taken.",409);
-    const userId=id();const hash=await passwordHash(password);
-    await env.DB.prepare("INSERT INTO users(id,username,password_hash,role) VALUES(?,?,?,?)").bind(userId,username,hash,role).run();
-    await audit(env,user,"user_created",username,"success",{role});
-    return json({ok:true,id:userId,username,role},201);
+    const userId=id();const issued=await issueSecretCode(env);const placeholderPasswordHash=await passwordHash(toHex(crypto.getRandomValues(new Uint8Array(32))));
+    await env.DB.prepare("INSERT INTO users(id,username,password_hash,login_code_hash,role) VALUES(?,?,?,?,?)").bind(userId,username,placeholderPasswordHash,issued.hash,role).run();
+    await audit(env,user,"user_created",username,"success",{role,login_code_issued:true});
+    return json({ok:true,id:userId,username,role,login_code:issued.code},201);
   }
   if (path === "/api/admin/users" && request.method === "GET") {
     if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
-    const rows=await env.DB.prepare("SELECT id,username,display_name,role,status,created_at,last_login_at FROM users ORDER BY created_at DESC LIMIT 500").all();
+    const rows=await env.DB.prepare("SELECT id,username,display_name,role,status,created_at,last_login_at,CASE WHEN login_code_hash IS NULL THEN 0 ELSE 1 END AS has_login_code FROM users ORDER BY created_at DESC LIMIT 500").all();
     return json({users:rows.results||[]});
+  }
+  const adminCodeRoute=path.match(/^\/api\/admin\/users\/([^/]+)\/code$/);
+  if(adminCodeRoute&&request.method==="POST"){
+    if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
+    const targetId=decodeURIComponent(adminCodeRoute[1]);
+    const target=await env.DB.prepare("SELECT id,username,role,status FROM users WHERE id=?").bind(targetId).first();
+    if(!target)return fail("User not found.",404);
+    const issued=await issueSecretCode(env);const replacementPasswordHash=await passwordHash(toHex(crypto.getRandomValues(new Uint8Array(32))));
+    await env.DB.prepare("UPDATE users SET login_code_hash=?,password_hash=?,updated_at=? WHERE id=?").bind(issued.hash,replacementPasswordHash,new Date().toISOString(),targetId).run();
+    await env.DB.prepare("DELETE FROM sessions WHERE user_id=?").bind(targetId).run();
+    await audit(env,user,"user_login_code_reset",target.username,"success",{role:target.role});
+    return json({ok:true,username:target.username,login_code:issued.code});
   }
   const roleRoute=path.match(/^\/api\/admin\/users\/([^/]+)\/role$/);
   if(roleRoute&&request.method==="PATCH"){

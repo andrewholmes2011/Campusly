@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS users (
   display_name TEXT NOT NULL DEFAULT '',
   avatar_url TEXT NOT NULL DEFAULT '',
   password_hash TEXT NOT NULL,
+  login_code_hash TEXT UNIQUE,
   role TEXT NOT NULL DEFAULT 'student' CHECK (role IN ('student','teacher','moderator','administrator')),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended','disabled')),
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -130,3 +131,9 @@ CREATE TABLE IF NOT EXISTS announcements (
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS announcements_active_idx ON announcements(active,pinned,created_at);
+
+CREATE TABLE IF NOT EXISTS auth_login_attempts (
+  ip_hash TEXT NOT NULL,
+  attempted_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS auth_login_attempts_ip_time_idx ON auth_login_attempts(ip_hash, attempted_at);
