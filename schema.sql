@@ -107,3 +107,26 @@ CREATE TABLE IF NOT EXISTS reports (
   resolved_at TEXT
 );
 CREATE INDEX IF NOT EXISTS reports_status_idx ON reports(status,created_at);
+
+
+-- Site-wide configuration is editable through the Campusly administration console.
+CREATE TABLE IF NOT EXISTS site_settings (
+  setting_key TEXT PRIMARY KEY,
+  setting_value TEXT NOT NULL,
+  updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- School announcements can be targeted, pinned, published, drafted, edited, or removed.
+CREATE TABLE IF NOT EXISTS announcements (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  audience TEXT NOT NULL DEFAULT 'all' CHECK (audience IN ('all','students','teachers','staff')),
+  pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0,1)),
+  active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS announcements_active_idx ON announcements(active,pinned,created_at);
