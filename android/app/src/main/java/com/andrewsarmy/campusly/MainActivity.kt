@@ -28,7 +28,7 @@ import android.widget.TextView
 
 class MainActivity : Activity() {
     private lateinit var webView: WebView
-    private lateinit var progress: ProgressBar
+    private lateinit var loadingIndicator: ProgressBar
     private lateinit var errorPanel: LinearLayout
 
     private val campuslyUrl = "https://campusly.andrewsarmy-cf.workers.dev/"
@@ -45,7 +45,7 @@ class MainActivity : Activity() {
         window.decorView.systemUiVisibility = 0
 
         val root = FrameLayout(this).apply {
-            setBackgroundColor(background)
+            setBackgroundColor(this@MainActivity.background)
         }
 
         webView = WebView(this).apply {
@@ -71,12 +71,12 @@ class MainActivity : Activity() {
                 }
 
                 override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
-                    progress.visibility = View.VISIBLE
+                    loadingIndicator.visibility = View.VISIBLE
                     errorPanel.visibility = View.GONE
                 }
 
                 override fun onPageFinished(view: WebView, url: String) {
-                    progress.visibility = View.GONE
+                    loadingIndicator.visibility = View.GONE
                 }
 
                 override fun onReceivedError(
@@ -85,7 +85,7 @@ class MainActivity : Activity() {
                     error: WebResourceError
                 ) {
                     if (request.isForMainFrame) {
-                        progress.visibility = View.GONE
+                        loadingIndicator.visibility = View.GONE
                         errorPanel.visibility = View.VISIBLE
                     }
                 }
@@ -93,7 +93,7 @@ class MainActivity : Activity() {
             webChromeClient = WebChromeClient()
         }
 
-        progress = ProgressBar(this).apply {
+        loadingIndicator = ProgressBar(this).apply {
             isIndeterminate = true
             indeterminateTintList = android.content.res.ColorStateList.valueOf(blue)
         }
@@ -102,7 +102,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(28), dp(28), dp(28), dp(28))
-            setBackgroundColor(background)
+            setBackgroundColor(this@MainActivity.background)
             visibility = View.GONE
             addView(TextView(this@MainActivity).apply {
                 text = "Can't connect to Campusly"
@@ -127,7 +127,7 @@ class MainActivity : Activity() {
         }
 
         root.addView(webView, FrameLayout.LayoutParams(-1, -1))
-        root.addView(progress, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+        root.addView(loadingIndicator, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
             topMargin = dp(18)
         })
         root.addView(errorPanel, FrameLayout.LayoutParams(-1, -1))
@@ -144,11 +144,11 @@ class MainActivity : Activity() {
     private fun loadCampusly() {
         errorPanel.visibility = View.GONE
         if (!isOnline()) {
-            progress.visibility = View.GONE
+            loadingIndicator.visibility = View.GONE
             errorPanel.visibility = View.VISIBLE
             return
         }
-        progress.visibility = View.VISIBLE
+        loadingIndicator.visibility = View.VISIBLE
         webView.loadUrl(campuslyUrl)
     }
 
