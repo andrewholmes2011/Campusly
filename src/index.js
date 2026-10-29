@@ -98,11 +98,20 @@ async function seedAdmin(env) {
 async function handle(request, env) {
   if (!env.DB) return fail("Database binding is missing. Configure the Campusly D1 database.", 503);
   await seedAdmin(env);
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS site_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL, updated_by TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS announcements (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, audience TEXT NOT NULL DEFAULT 'all', pinned INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)").run();
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/$/, "") || "/";
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS", "access-control-allow-headers": "content-type", "access-control-max-age": "86400", "vary": "Origin" } });
   if (path.startsWith("/api/") && !isSecureOrigin(request)) return fail("Cross-origin request rejected.", 403);
   if (path === "/api/health" && request.method === "GET") return json({ ok: true, service: "Campusly API" });
+
+  if (path === "/api/site-config" && request.method === "GET") {
+    const rows = await env.DB.prepare("SELECT setting_key,setting_value FROM site_settings WHERE setting_key IN ('site_name','school_name','tagline','announcement_banner','accent_color','support_url','maintenance_mode','max_message_length')").all();
+    const settings = Object.fromEntries((rows.results||[]).map(r=>[r.setting_key,(()=>{try{return JSON.parse(r.setting_value)}catch{return r.setting_value}})()]));
+    return json({settings:{site_name:settings.site_name||"Campusly",school_name:settings.school_name||"",tagline:settings.tagline||"Your school community, connected.",announcement_banner:settings.announcement_banner||"",accent_color:settings.accent_color||"#4867e8",support_url:settings.support_url||"",maintenance_mode:!!settings.maintenance_mode,max_message_length:Number(settings.max_message_length)||4000}});
+  }
+
   if (path === "/api/auth/login" && request.method === "POST") {
     const data = await body(request);
     if (!data || typeof data.username !== "string" || typeof data.password !== "string" || data.username.length > 64 || data.password.length > 256) return fail("Enter a valid username and password.", 400);
@@ -129,6 +138,8 @@ async function handle(request, env) {
   if (path === "/api/me" && request.method === "GET") return user ? json({ user }) : fail("Authentication required.", 401);
   if (!user) return fail("Authentication required.", 401);
   if (user.status !== "active") return fail("Account is not active.", 403);
+  const maintenanceSetting = await env.DB.prepare("SELECT setting_value FROM site_settings WHERE setting_key='maintenance_mode'").first();
+  if (maintenanceSetting && maintenanceSetting.setting_value === "true" && user.role !== "administrator") return fail("Campusly is temporarily in maintenance mode. Please try again later.", 503);
 
   if (path === "/api/profile" && request.method === "PATCH") {
     const data = await body(request);
@@ -450,11 +461,11 @@ async function handle(request, env) {
     if (!requireRole(user, ADMIN_ROLES)) return fail("Administrator permission required.", 403);
     const data = await body(request);
     if (!data || typeof data !== "object" || Array.isArray(data)) return fail("Provide a settings object.");
-    const allowed = new Set(["site_name","school_name","tagline","announcement_banner","allow_student_signup","maintenance_mode","max_message_length","accent_color","support_url"]);
+    const allowed = new Set(["site_name","school_name","tagline","announcement_banner","maintenance_mode","max_message_length","accent_color","support_url"]);
     for (const [key,value] of Object.entries(data)) {
       if (!allowed.has(key)) return fail("Setting is not editable: " + key);
       if (["site_name","school_name","tagline","announcement_banner","accent_color","support_url"].includes(key) && typeof value !== "string") return fail("Invalid value for " + key);
-      if (["allow_student_signup","maintenance_mode"].includes(key) && typeof value !== "boolean") return fail("Invalid value for " + key);
+      if (key === "maintenance_mode" && typeof value !== "boolean") return fail("Invalid value for " + key);
       if (key === "max_message_length" && (!Number.isInteger(value) || value < 100 || value > 4000)) return fail("Message length must be between 100 and 4000.");
       const encoded = JSON.stringify(value);
       await env.DB.prepare("INSERT INTO site_settings(setting_key,setting_value,updated_by,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP").bind(key,encoded,user.id).run();
