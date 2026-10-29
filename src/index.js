@@ -269,7 +269,7 @@ async function handle(request, env) {
   }
   if (path === "/api/admin/users" && request.method === "GET") {
     if(!requireRole(user,ADMIN_ROLES))return fail("Administrator permission required.",403);
-    const rows=await env.DB.prepare("SELECT id,username,role,status,created_at,last_login_at FROM users ORDER BY created_at DESC LIMIT 500").all();
+    const rows=await env.DB.prepare("SELECT id,username,display_name,role,status,created_at,last_login_at FROM users ORDER BY created_at DESC LIMIT 500").all();
     return json({users:rows.results||[]});
   }
   const roleRoute=path.match(/^\/api\/admin\/users\/([^/]+)\/role$/);
