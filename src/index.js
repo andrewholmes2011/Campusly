@@ -145,6 +145,12 @@ async function handle(request, env) {
     return json({ ok: true, user: { id: user.id, username, display_name: displayName, avatar_url: avatarUrl, role: user.role } });
   }
 
+  if (path === "/api/announcements" && request.method === "GET") {
+    const audienceRoles = user.role === "student" ? ["all","students"] : user.role === "teacher" ? ["all","teachers","staff"] : ["all","staff"];
+    const placeholders = audienceRoles.map(() => "?").join(",");
+    const rows = await env.DB.prepare("SELECT id,title,body,audience,pinned,created_at,updated_at FROM announcements WHERE active=1 AND audience IN ("+placeholders+") ORDER BY pinned DESC,created_at DESC LIMIT 30").bind(...audienceRoles).all();
+    return json({announcements:rows.results||[]});
+  }
   if (path === "/api/class-catalog" && request.method === "GET") {
     await ensureDefaultClassServers(env, user);
     const rows = await env.DB.prepare("SELECT c.id,c.name,c.description,(SELECT COUNT(*) FROM class_members cm2 WHERE cm2.class_id=c.id) AS member_count,EXISTS(SELECT 1 FROM class_members cm WHERE cm.class_id=c.id AND cm.user_id=?) AS joined,(SELECT GROUP_CONCAT(ch.name, ', ') FROM channels ch WHERE ch.class_id=c.id) AS channel_names FROM classes c ORDER BY CASE c.name WHEN 'AP Human Geography' THEN 1 WHEN 'English Language Arts' THEN 2 WHEN 'Algebra 1' THEN 3 WHEN 'Earth Science' THEN 4 WHEN 'AVID' THEN 5 WHEN 'Health' THEN 6 WHEN 'Chamber Choir' THEN 7 WHEN 'Computer Science' THEN 8 WHEN 'World Languages' THEN 9 WHEN 'Physical Education' THEN 10 WHEN 'Fine Arts & Electives' THEN 11 ELSE 99 END,c.name LIMIT 200").bind(user.id).all();
