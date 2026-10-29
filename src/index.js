@@ -2,6 +2,7 @@ const ROLES = ["student", "teacher", "moderator", "administrator"];
 const ADMIN_ROLES = new Set(["administrator"]);
 const STAFF_ROLES = new Set(["administrator", "moderator"]);
 const SESSION_DAYS = 7;
+let secretCodeSchemaReady = false;
 const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers } });
 const fail = (message, status = 400) => json({ error: message }, status);
 const uuid = () => crypto.randomUUID();
@@ -115,6 +116,20 @@ async function seedAdmin(env) {
 }
 async function handle(request, env) {
   if (!env.DB) return fail("Database binding is missing. Configure the Campusly D1 database.", 503);
+  if (!secretCodeSchemaReady) {
+    const userColumns = await env.DB.prepare("PRAGMA table_info(users)").all();
+    if (!(userColumns.results || []).some(column => column.name === "login_code_hash")) {
+      try {
+        await env.DB.prepare("ALTER TABLE users ADD COLUMN login_code_hash TEXT").run();
+      } catch (error) {
+        if (!String(error?.message || error).toLowerCase().includes("duplicate column")) throw error;
+      }
+    }
+    await env.DB.prepare("CREATE UNIQUE INDEX IF NOT EXISTS users_login_code_hash_unique ON users(login_code_hash)").run();
+    await env.DB.prepare("CREATE TABLE IF NOT EXISTS auth_login_attempts (ip_hash TEXT NOT NULL, attempted_at TEXT NOT NULL)").run();
+    await env.DB.prepare("CREATE INDEX IF NOT EXISTS auth_login_attempts_ip_time_idx ON auth_login_attempts(ip_hash, attempted_at)").run();
+    secretCodeSchemaReady = true;
+  }
   await seedAdmin(env);
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS site_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL, updated_by TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)").run();
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS announcements (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, audience TEXT NOT NULL DEFAULT 'all', pinned INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)").run();
