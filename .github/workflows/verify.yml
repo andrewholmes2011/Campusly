@@ -1,0 +1,20 @@
+name: Validate Campusly Changes
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate Worker and browser JavaScript
+        run: |
+          node --check src/index.js
+          sed -n '/<script>/,/<\/script>/p' public/index.html | sed '1d;$d' > /tmp/campusly-frontend.js
+          node --check /tmp/campusly-frontend.js
