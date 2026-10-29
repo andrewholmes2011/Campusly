@@ -115,6 +115,13 @@ async function seedAdmin(env) {
 }
 async function handle(request, env) {
   if (!env.DB) return fail("Database binding is missing. Configure the Campusly D1 database.", 503);
+  const userColumns = await env.DB.prepare("PRAGMA table_info(users)").all();
+  if (!(userColumns.results || []).some(column => column.name === "login_code_hash")) {
+    await env.DB.prepare("ALTER TABLE users ADD COLUMN login_code_hash TEXT").run();
+  }
+  await env.DB.prepare("CREATE UNIQUE INDEX IF NOT EXISTS users_login_code_hash_unique ON users(login_code_hash)").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS auth_login_attempts (ip_hash TEXT NOT NULL, attempted_at TEXT NOT NULL)").run();
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS auth_login_attempts_ip_time_idx ON auth_login_attempts(ip_hash, attempted_at)").run();
   await seedAdmin(env);
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS site_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT NOT NULL, updated_by TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)").run();
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS announcements (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, audience TEXT NOT NULL DEFAULT 'all', pinned INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_by TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)").run();
